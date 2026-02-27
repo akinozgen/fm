@@ -1,0 +1,157 @@
+FM
+Cross-platform file manager (Tauri + Vue + Rust)
+
+STATUS
+This project is an active work-in-progress.
+It is already usable for core navigation and selection workflows, but it is not complete.
+Some features are intentionally scaffolded for future expansion.
+
+IMPORTANT NOTE ABOUT AUTHORSHIP
+This codebase was built with strong AI assistance and rapid iteration.
+The implementation quality is real, but development speed does not represent a traditional manual timeline.
+This README is intentionally direct and honest about that.
+
+PROJECT GOALS
+1) Fast, predictable UI with no filesystem work on the renderer thread.
+2) Native-like desktop behavior while still using web UI technology.
+3) A reusable backend core that can evolve independently of the current UI.
+
+ARCHITECTURE
+Frontend:
+- Vue + Vite, rendered inside Tauri webview.
+- Focused on state rendering and interaction logic.
+- Uses commands/events for backend communication.
+
+Backend:
+- Rust (Tauri commands + async tasks).
+- Owns filesystem operations, chunked directory reading, cancellation, storage bootstrap, and platform integration.
+
+State and persistence:
+- Preferences via tauri-plugin-store.
+- Queryable data/history via SQLite (rusqlite).
+- Paths and storage bootstrapped in OS-specific config locations.
+
+CURRENT FEATURE SET
+Navigation:
+- Back/forward/up navigation.
+- Address bar with breadcrumb navigation.
+- Address bar edit mode with manual path navigation.
+- Unix path expansion support in address bar (for example: ~, $HOME).
+
+Virtual locations:
+- fm://welcome (home/start screen)
+- fm://home (alias to fm://welcome)
+- fm://trash
+
+Views:
+- List view and grid view.
+- Per-directory view mode persistence.
+
+Listing engine:
+- Chunked directory listing from Rust.
+- Cancellation of in-flight read jobs on navigation.
+- Hidden file detection and toggle (Ctrl+H).
+- File icon loading with caching.
+
+Selection:
+- Single selection.
+- Ctrl/Cmd multi-select.
+- Shift range-select.
+- Rectangle selection.
+- Ctrl + rectangle toggle behavior.
+- Keyboard cursor tracking.
+- Ctrl+Arrow movement without clearing selection.
+- Space toggles focused item selection.
+- Shift+Arrow and Ctrl+Shift+Arrow range behavior.
+- Ctrl+A select all.
+
+File operations:
+- Open file/folder on activation.
+- Rename (F2, inline).
+- New file draft flow from sidebar quick add.
+- New folder draft flow (Ctrl+Shift+N).
+- Delete with native confirmation.
+- Delete routes to OS trash by default.
+- Shift+Delete permanent delete.
+- Trash view listing.
+- Empty Trash action (Linux/Windows path currently implemented).
+
+Context menus:
+- Native context menu framework for file area.
+- Distinguishes right-click context:
+  empty space, file, folder.
+- Current menu actions are placeholder/informational by design.
+
+UI:
+- Resizable sidebar.
+- Welcome/start page with user dirs and drives.
+- Action toolbar.
+- Status bar:
+  item count, selected count, selected size (files-only selection).
+- Address bar style customized toward native segmented breadcrumb look.
+
+PLATFORM NOTES
+Linux:
+- Primary development platform.
+- Trash flow and listing integrated.
+
+Windows:
+- Core navigation/listing/selection logic is cross-platform.
+- Delete-to-trash supported via trash crate abstraction.
+- Trash listing/empty behavior may differ and needs platform validation.
+
+macOS:
+- Core app should run via Tauri stack.
+- Some trash maintenance flows are intentionally deferred for mac-specific implementation.
+
+KNOWN LIMITATIONS / TODO
+- Context menu actions are placeholders (framework first, actions later).
+- Copy/cut/paste pipeline is not fully wired end-to-end yet.
+- Advanced conflict handling for move/copy not implemented.
+- No dedicated transfer queue UI yet.
+- No full search subsystem yet.
+- Drag/drop move/copy behavior not finalized.
+- Trash restore flow not implemented yet.
+
+LOCAL DEVELOPMENT
+Requirements:
+- Node.js and npm
+- Rust toolchain
+- Tauri prerequisites for your OS
+
+Install:
+- npm install
+
+Run (frontend + tauri dev):
+- npm run tauri dev
+
+Frontend only:
+- npm run dev
+
+Build frontend:
+- npm run build
+
+PROJECT LAYOUT
+- src/                  Vue app
+- src/components/       UI components
+- src/lib/              Frontend services/utilities
+- src-tauri/src/        Rust backend
+- src-tauri/src/core.rs Core listing/walk/cancellation logic
+- src-tauri/src/context_menu.rs Native file-area context menu framework
+
+DESIGN PRINCIPLES USED
+- Keep renderer lightweight.
+- Stream and incrementally render.
+- Cancel stale jobs aggressively.
+- Prioritize keyboard and native desktop interaction patterns.
+- Prefer modular services over monolithic App-level logic.
+
+CONTRIBUTING STYLE (PRACTICAL)
+- Keep changes incremental and testable.
+- Avoid giant mixed-purpose patches when possible.
+- Preserve current UX consistency unless intentionally redesigning.
+- For file operations, keep backend safety checks strict.
+
+LICENSE
+MIT License.
+See LICENSE file in the repository root.
