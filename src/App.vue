@@ -127,6 +127,7 @@ const unlistenFns = [];
 
 let resizing = false;
 let teardownKeybindings = () => {};
+let directoryWatchDebounceTimer = 0;
 
 const sortedEntries = computed(() => {
   return [...entries.value].sort((a, b) => {
@@ -228,6 +229,11 @@ async function navigateTo(path, options = {}) {
   loading.value = true;
 
   if (isTrashPath(nextPath)) {
+    try {
+      await invoke('stop_dir_watch_cmd');
+    } catch {
+      // Ignore watcher stop errors.
+    }
     if (shouldRecordHistory) {
       recordHistory(nextPath);
     }
@@ -262,6 +268,11 @@ async function navigateTo(path, options = {}) {
       }
     });
     activeRequestId.value = requestId;
+    try {
+      await invoke('start_dir_watch_cmd', { path: nextPath });
+    } catch {
+      // Ignore watcher start errors (unsupported/fs edge cases).
+    }
   } catch {
     loading.value = false;
   }
@@ -281,6 +292,11 @@ async function deleteManualHistoryPath(path) {
 async function openWelcome(options = {}) {
   const { shouldRecordHistory = true } = options;
   await cancelActiveRequest();
+  try {
+    await invoke('stop_dir_watch_cmd');
+  } catch {
+    // Ignore watcher stop errors.
+  }
   showWelcome.value = true;
   currentPath.value = FM_WELCOME;
   entries.value = [];
@@ -389,6 +405,15 @@ async function setShowHidden(value) {
       includeHidden: showHidden.value
     });
   }
+}
+
+function refreshCurrentView() {
+  if (!currentPath.value) return;
+  if (isWelcomePath(currentPath.value)) return;
+  navigateTo(currentPath.value, {
+    shouldRecordHistory: false,
+    includeHidden: showHidden.value
+  });
 }
 
 async function setShowExtensions(value) {
@@ -589,12 +614,29 @@ async function hookEvents() {
     }
   });
 
+  const unlistenDirChanged = await listen('fm://dir-changed', (event) => {
+    const watchedPath = normalizePath(event.payload || '');
+    const current = normalizePath(currentPath.value);
+    if (!watchedPath || !current) return;
+    if (isWelcomePath(current) || isTrashPath(current)) return;
+    if (watchedPath !== current) return;
+
+    if (directoryWatchDebounceTimer) {
+      window.clearTimeout(directoryWatchDebounceTimer);
+      directoryWatchDebounceTimer = 0;
+    }
+    directoryWatchDebounceTimer = window.setTimeout(() => {
+      directoryWatchDebounceTimer = 0;
+      refreshCurrentView();
+    }, 180);
+  });
+
   const unlistenContextInfo = await listenFileContextMenu((payload) => {
     if (!payload.kind) return;
     console.info('file context menu click', payload);
   });
 
-  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenContextInfo);
+  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo);
 }
 
 onMounted(async () => {
@@ -610,7 +652,8 @@ onMounted(async () => {
     onNavigateBack: navigateBack,
     onNavigateForward: navigateForward,
     onNewFolder: startCreateFolderDraft,
-    onFocusAddressBar: () => toolbarRef.value?.startAddressEditing?.()
+    onFocusAddressBar: () => toolbarRef.value?.startAddressEditing?.(),
+    onRefresh: refreshCurrentView
   });
   await hookEvents();
   await loadSidebar();
@@ -618,9 +661,18 @@ onMounted(async () => {
 
 onBeforeUnmount(async () => {
   resizing = false;
+  if (directoryWatchDebounceTimer) {
+    window.clearTimeout(directoryWatchDebounceTimer);
+    directoryWatchDebounceTimer = 0;
+  }
   teardownKeybindings();
   for (const unlisten of unlistenFns) {
     unlisten();
+  }
+  try {
+    await invoke('stop_dir_watch_cmd');
+  } catch {
+    // Ignore watcher stop errors.
   }
   await cancelActiveRequest();
 });

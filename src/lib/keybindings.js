@@ -3,7 +3,8 @@ export function setupKeybindings({
   onNavigateBack,
   onNavigateForward,
   onNewFolder,
-  onFocusAddressBar
+  onFocusAddressBar,
+  onRefresh
 }) {
   const onKeyDown = (event) => {
     const target = event.target;
@@ -20,6 +21,12 @@ export function setupKeybindings({
       if (event.key.toLowerCase() === 'h') {
         event.preventDefault();
         onToggleHidden?.();
+        return;
+      }
+      if (event.key.toLowerCase() === 'r') {
+        event.preventDefault();
+        onRefresh?.();
+        return;
       }
     }
 
@@ -45,6 +52,11 @@ export function setupKeybindings({
     }
 
     if (!event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      if (event.key === 'F5') {
+        event.preventDefault();
+        onRefresh?.();
+        return;
+      }
       if (event.key === 'F6') {
         event.preventDefault();
         onFocusAddressBar?.();

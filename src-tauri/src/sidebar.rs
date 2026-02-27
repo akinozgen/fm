@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use directories::UserDirs;
@@ -36,6 +36,57 @@ fn add_dir_if_exists(items: &mut Vec<SidebarItem>, label: &str, path: PathBuf) {
       kind: "folder".to_string(),
     });
   }
+}
+
+fn format_drive_size(bytes: u64) -> String {
+  const GB: u64 = 1024 * 1024 * 1024;
+  const TB: u64 = GB * 1024;
+  if bytes >= TB {
+    format!("{:.1} TB", (bytes as f64) / (TB as f64))
+  } else if bytes >= GB {
+    format!("{:.0} GB", (bytes as f64) / (GB as f64))
+  } else {
+    format!("{:.0} MB", (bytes as f64) / (1024.0 * 1024.0))
+  }
+}
+
+fn linux_mount_priority(mount: &str, home_mount: Option<&str>) -> (u8, usize) {
+  if mount == "/" {
+    return (0, 0);
+  }
+  if let Some(home) = home_mount {
+    if mount == home {
+      return (1, 0);
+    }
+  }
+  let depth = mount.split('/').filter(|s| !s.is_empty()).count();
+  (2, depth)
+}
+
+fn human_drive_label(mount: &str, device_name: &str, total_space: u64, home_mount: Option<&str>) -> String {
+  let base = if mount == "/" {
+    "Root".to_string()
+  } else if let Some(home) = home_mount {
+    if mount == home {
+      "Home".to_string()
+    } else {
+      PathBuf::from(mount)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(device_name)
+        .to_string()
+    }
+  } else {
+    PathBuf::from(mount)
+      .file_name()
+      .and_then(|n| n.to_str())
+      .filter(|s| !s.is_empty())
+      .unwrap_or(device_name)
+      .to_string()
+  };
+
+  format!("{base} ({})", format_drive_size(total_space))
 }
 
 pub fn build_sidebar() -> Vec<SidebarSection> {
@@ -80,6 +131,12 @@ pub fn build_sidebar() -> Vec<SidebarSection> {
   let mut drives: Vec<SidebarItem> = Vec::new();
   let mut removable: Vec<SidebarItem> = Vec::new();
   let mut seen_mounts: HashSet<String> = HashSet::new();
+  let home_mount = UserDirs::new()
+    .map(|u| u.home_dir().to_string_lossy().to_string());
+
+  #[cfg(target_os = "linux")]
+  let mut linux_by_device: HashMap<String, SidebarItem> = HashMap::new();
+
   let disks = Disks::new_with_refreshed_list();
   for disk in disks.list() {
     let mount = disk.mount_point().to_path_buf();
@@ -88,15 +145,20 @@ pub fn build_sidebar() -> Vec<SidebarSection> {
       continue;
     }
 
-    let label = disk
+    let device_name = disk
       .name()
       .to_str()
       .map(|s| s.to_string())
       .unwrap_or_else(|| mount_str.clone());
 
     let item = SidebarItem {
-      label,
-      path: mount_str,
+      label: human_drive_label(
+        &mount_str,
+        &device_name,
+        disk.total_space(),
+        home_mount.as_deref(),
+      ),
+      path: mount_str.clone(),
       kind: if disk.is_removable() {
         "device_removable".to_string()
       } else {
@@ -104,11 +166,44 @@ pub fn build_sidebar() -> Vec<SidebarSection> {
       },
     };
 
-    if disk.is_removable() {
-      removable.push(item);
-    } else {
-      drives.push(item);
+    #[cfg(target_os = "linux")]
+    {
+      if disk.is_removable() {
+        removable.push(item);
+      } else {
+        // Linux often mounts the same device at multiple mount points (subvolumes/binds).
+        // Keep one representative mount per device with stable priority.
+        let next_priority = linux_mount_priority(&mount_str, home_mount.as_deref());
+        let key = device_name.clone();
+        match linux_by_device.get(&key) {
+          Some(existing) => {
+            let existing_priority = linux_mount_priority(&existing.path, home_mount.as_deref());
+            if next_priority < existing_priority {
+              linux_by_device.insert(key, item);
+            }
+          }
+          None => {
+            linux_by_device.insert(key, item);
+          }
+        }
+      }
+      continue;
     }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+      if disk.is_removable() {
+        removable.push(item);
+      } else {
+        drives.push(item);
+      }
+    }
+  }
+
+  #[cfg(target_os = "linux")]
+  {
+    drives = linux_by_device.into_values().collect();
+    drives.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
   }
 
   sections.push(SidebarSection {

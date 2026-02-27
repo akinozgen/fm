@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State};
 
 mod core;
@@ -35,6 +36,23 @@ struct StorageState {
 impl StorageState {
   fn new(paths: StoragePaths) -> Self {
     Self { paths }
+  }
+}
+
+struct ActiveDirWatcher {
+  watcher: RecommendedWatcher,
+  path: String,
+}
+
+struct DirWatchState {
+  active: Mutex<Option<ActiveDirWatcher>>,
+}
+
+impl DirWatchState {
+  fn new() -> Self {
+    Self {
+      active: Mutex::new(None),
+    }
   }
 }
 
@@ -385,6 +403,55 @@ fn empty_trash_cmd() -> Result<u32, String> {
 }
 
 #[tauri::command]
+fn stop_dir_watch_cmd(state: State<'_, DirWatchState>) -> Result<(), String> {
+  let mut guard = state.active.lock().unwrap();
+  if let Some(mut active) = guard.take() {
+    let _ = active.watcher.unwatch(std::path::Path::new(&active.path));
+  }
+  Ok(())
+}
+
+#[tauri::command]
+fn start_dir_watch_cmd(
+  app: AppHandle,
+  state: State<'_, DirWatchState>,
+  path: String,
+) -> Result<(), String> {
+  let dir = PathBuf::from(&path);
+  if !dir.is_dir() {
+    return Err("watch target is not a directory".to_string());
+  }
+  let watch_path = dir.to_string_lossy().to_string();
+  let emit_path = watch_path.clone();
+  let app_handle = app.clone();
+
+  let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+    let Ok(event) = res else {
+      return;
+    };
+    if matches!(event.kind, EventKind::Access(_)) {
+      return;
+    }
+    let _ = app_handle.emit("fm://dir-changed", emit_path.clone());
+  })
+  .map_err(|e| e.to_string())?;
+
+  watcher
+    .watch(std::path::Path::new(&watch_path), RecursiveMode::NonRecursive)
+    .map_err(|e| e.to_string())?;
+
+  let mut guard = state.active.lock().unwrap();
+  if let Some(mut old) = guard.take() {
+    let _ = old.watcher.unwatch(std::path::Path::new(&old.path));
+  }
+  *guard = Some(ActiveDirWatcher {
+    watcher,
+    path: watch_path,
+  });
+  Ok(())
+}
+
+#[tauri::command]
 fn show_address_menu_cmd(
   window: tauri::Window,
   state: State<'_, AddressMenuState>,
@@ -409,6 +476,7 @@ pub fn run() {
     .manage(Arc::new(FileCoreState::new()))
     .manage(AddressMenuState::new())
     .manage(FileContextMenuState::new())
+    .manage(DirWatchState::new())
     .manage(StorageState::new(storage_paths))
     .invoke_handler(tauri::generate_handler![
       read_dir_cmd,
@@ -426,6 +494,8 @@ pub fn run() {
       delete_paths_cmd,
       list_trash_entries_cmd,
       empty_trash_cmd,
+      start_dir_watch_cmd,
+      stop_dir_watch_cmd,
       show_address_menu_cmd,
       show_file_context_menu_cmd
     ])
