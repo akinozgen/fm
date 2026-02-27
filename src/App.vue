@@ -47,6 +47,7 @@
         v-else
         ref="mainContentRef"
         :view-mode="viewMode"
+        :grid-zoom="gridZoom"
         :current-path="currentPath"
         :entries="sortedEntries"
         :loading="loading"
@@ -88,6 +89,7 @@ import {
   saveGlobalPrefs,
   setDirectoryPrefs
 } from './lib/appPreferences';
+import { clearThumbnailQueue } from './lib/iconCache';
 import { listenFileContextMenu } from './lib/contextMenu';
 import { setupKeybindings } from './lib/keybindings';
 import { bootstrapPreferencesStore } from './lib/preferencesStore';
@@ -106,6 +108,7 @@ import Toolbar from './components/Toolbar.vue';
 import WelcomePage from './components/WelcomePage.vue';
 
 const viewMode = ref('list');
+const gridZoom = ref(110); // tile cell min-width in px; icon size derived from this
 const sidebarWidth = ref(220);
 const sidebarSections = ref([]);
 const currentPath = ref(FM_WELCOME);
@@ -225,6 +228,7 @@ async function navigateTo(path, options = {}) {
   showWelcome.value = false;
   currentPath.value = nextPath;
   entries.value = [];
+  clearThumbnailQueue();
   selectedPaths.value = [];
   loading.value = true;
 
@@ -569,6 +573,7 @@ async function loadPreferences() {
   showHidden.value = !!prefs.showHidden;
   showExtensions.value = prefs.showExtensions !== false;
   showSelectionCheckboxes.value = !!prefs.showSelectionCheckboxes;
+  if (typeof prefs.gridZoom === 'number') gridZoom.value = prefs.gridZoom;
   manualPathHistory.value = await loadManualPathHistory();
 }
 
@@ -576,7 +581,8 @@ async function persistGlobalPrefs() {
   await saveGlobalPrefs({
     showHidden: showHidden.value,
     showExtensions: showExtensions.value,
-    showSelectionCheckboxes: showSelectionCheckboxes.value
+    showSelectionCheckboxes: showSelectionCheckboxes.value,
+    gridZoom: gridZoom.value
   });
 }
 
@@ -639,8 +645,29 @@ async function hookEvents() {
   unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo);
 }
 
+// ── Grid zoom (Ctrl+scroll) ───────────────────────────────────────────────────
+const GRID_ZOOM_MIN = 80;
+const GRID_ZOOM_MAX = 220;
+const GRID_ZOOM_STEP = 16;
+
+let gridZoomSaveTimer = 0;
+function scheduleGridZoomSave() {
+  if (gridZoomSaveTimer) clearTimeout(gridZoomSaveTimer);
+  gridZoomSaveTimer = setTimeout(persistGlobalPrefs, 800);
+}
+
+function onGridZoomWheel(e) {
+  if (!e.ctrlKey || viewMode.value !== 'grid') return;
+  e.preventDefault();
+  const dir = e.deltaY < 0 ? 1 : -1; // scroll up = zoom in
+  gridZoom.value = Math.min(GRID_ZOOM_MAX, Math.max(GRID_ZOOM_MIN, gridZoom.value + dir * GRID_ZOOM_STEP));
+  scheduleGridZoomSave();
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 onMounted(async () => {
   document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth.value}px`);
+  window.addEventListener('wheel', onGridZoomWheel, { passive: false });
   try {
     await bootstrapPreferencesStore();
   } catch (error) {
@@ -660,6 +687,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(async () => {
+  window.removeEventListener('wheel', onGridZoomWheel);
+  if (gridZoomSaveTimer) clearTimeout(gridZoomSaveTimer);
   resizing = false;
   if (directoryWatchDebounceTimer) {
     window.clearTimeout(directoryWatchDebounceTimer);

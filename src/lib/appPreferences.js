@@ -7,7 +7,8 @@ const KEY_DIR_PREFS = 'directoryPrefs';
 const DEFAULT_GLOBAL_PREFS = {
   showHidden: false,
   showExtensions: true,
-  showSelectionCheckboxes: false
+  showSelectionCheckboxes: false,
+  gridZoom: 110
 };
 
 function fnv1aHash(input) {

@@ -13,7 +13,7 @@
     <div v-if="loading" class="status-line">Loading...</div>
     <div v-else-if="entries.length === 0" class="status-line">Empty folder</div>
 
-    <section v-if="viewMode === 'grid'" class="grid">
+    <section v-if="viewMode === 'grid'" class="grid" :style="gridStyle">
       <button
         v-for="(entry, index) in entries"
         :key="entry.path"
@@ -31,7 +31,7 @@
           :checked="isSelected(entry.path)"
           @click.stop="toggleCheckbox(entry.path, index)"
         />
-        <FileIcon :path="entry.path" :is-dir="entry.is_dir" :size="48" />
+        <FileIcon :path="entry.path" :is-dir="entry.is_dir" :size="gridThumbnailRequestSize" />
         <input
           v-if="isRenaming(entry.path)"
           :ref="setRenameInputRef"
@@ -103,7 +103,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, toRefs, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRefs, watch } from 'vue';
 import { showNativeFileContextMenu } from '../lib/contextMenu';
 import { resolveFileContextTarget } from '../lib/contextResolver';
 import FileIcon from './FileIcon.vue';
@@ -148,9 +148,21 @@ const props = defineProps({
   requestDelete: {
     type: Function,
     required: true
+  },
+  gridZoom: {
+    type: Number,
+    default: 110
   }
 });
 const { viewMode, entries, loading, showExtensions, showSelectionCheckboxes } = toRefs(props);
+
+// Derived grid metrics from zoom level
+const gridThumbnailRequestSize = 48;
+const gridIconSize = computed(() => Math.round(props.gridZoom * 48 / 110));
+const gridStyle = computed(() => ({
+  '--grid-cell-min': `${props.gridZoom}px`,
+  '--grid-icon-size': `${gridIconSize.value}px`
+}));
 
 const emit = defineEmits(['open-dir', 'open-file', 'selection-change', 'remove-draft']);
 const selectedPaths = ref(new Set());

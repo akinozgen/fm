@@ -1,3 +1,4 @@
+use std::error::Error as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
@@ -10,6 +11,7 @@ mod context_menu;
 mod icons;
 mod sidebar;
 mod storage;
+mod thumbnails;
 use core::{read_dir, walk_dir, CancelFlag, FileCoreState, ReadOptions};
 use context_menu::{show_file_context_menu_cmd, FileContextMenuState};
 use icons::get_file_icon_png_base64;
@@ -105,8 +107,39 @@ fn cancel_cmd(state: State<'_, Arc<FileCoreState>>, request_id: u64) -> bool {
 
 #[tauri::command]
 fn get_file_icon_cmd(path: String, size: Option<u16>) -> Result<String, String> {
+  let trimmed = path.trim();
+  if trimmed.is_empty() || trimmed.starts_with("fm://") {
+    return Err("icon unavailable for virtual path".to_string());
+  }
+
+  let path_buf = PathBuf::from(trimmed);
+  #[cfg(windows)]
+  if !path_buf.is_absolute() {
+    return Err("icon path must be absolute".to_string());
+  }
+  if !path_buf.exists() {
+    return Err("icon path does not exist".to_string());
+  }
+
   let px = size.unwrap_or(24);
-  get_file_icon_png_base64(&path, px)
+  let resolved = std::fs::canonicalize(&path_buf).unwrap_or(path_buf);
+  get_file_icon_png_base64(&resolved.to_string_lossy(), px)
+}
+
+#[tauri::command]
+async fn get_thumbnails_batch_cmd(
+  storage: State<'_, StorageState>,
+  paths: Vec<String>,
+  size: u32,
+) -> Result<Vec<Option<String>>, String> {
+  let thumb_dir = PathBuf::from(&storage.paths.config_dir).join("thumbnails");
+  let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+  let thread_pool = Arc::new(rayon::ThreadPoolBuilder::new().build().unwrap());
+  tokio::task::spawn_blocking(move || {
+    thumbnails::get_thumbnails_parallel(&paths, size, &thumb_dir, &cancel_flag, &thread_pool)
+  })
+  .await
+  .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -292,17 +325,17 @@ fn delete_paths_cmd(paths: Vec<String>, permanent: Option<bool>) -> Result<u32, 
 }
 
 fn trash_root_dir() -> Result<PathBuf, String> {
-  let Some(base) = directories::BaseDirs::new() else {
+  let Some(_base) = directories::BaseDirs::new() else {
     return Err("unable to resolve home directory".to_string());
   };
 
   #[cfg(target_os = "linux")]
   {
-    return Ok(base.home_dir().join(".local/share/Trash/files"));
+    return Ok(_base.home_dir().join(".local/share/Trash/files"));
   }
   #[cfg(target_os = "macos")]
   {
-    return Ok(base.home_dir().join(".Trash"));
+    return Ok(_base.home_dir().join(".Trash"));
   }
   #[cfg(target_os = "windows")]
   {
@@ -377,12 +410,11 @@ fn empty_trash_cmd() -> Result<u32, String> {
         Ok(_) => purged += 1,
         Err(err) => {
           // Ignore races where an item was already removed by another process.
-          let is_not_found = match &err {
-            trash::Error::FileSystem { source, .. } => {
-              source.kind() == std::io::ErrorKind::NotFound
-            }
-            _ => false,
-          };
+          let is_not_found = err
+            .source()
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .map(|source| source.kind() == std::io::ErrorKind::NotFound)
+            .unwrap_or(false);
           if !is_not_found {
             errors.push(err.to_string());
           }
@@ -483,6 +515,7 @@ pub fn run() {
       walk_dir_cmd,
       cancel_cmd,
       get_file_icon_cmd,
+      get_thumbnails_batch_cmd,
       get_sidebar_cmd,
       get_storage_paths_cmd,
       open_path_cmd,
@@ -514,6 +547,7 @@ pub fn run() {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
             .level(log::LevelFilter::Info)
+            .level_for("file_icon_provider", log::LevelFilter::Error)
             .build(),
         )?;
       }

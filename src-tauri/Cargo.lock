@@ -116,6 +116,7 @@ dependencies = [
  "log",
  "notify",
  "opener",
+ "rayon",
  "rusqlite",
  "serde",
  "serde_json",
