@@ -58,10 +58,14 @@ import {
   FolderOpen,
   HardDrive,
   Home,
+  Monitor,
+  Music,
+  PictureInPicture2,
   Plus,
   Search,
   Trash2,
-  Usb
+  Usb,
+  Video
 } from 'lucide-vue-next';
 import { computed, reactive } from 'vue';
 import { getVirtualPathLabel, isVirtualPath, normalizePath } from '../lib/virtualPaths';
@@ -86,8 +90,12 @@ function toggleSection(title) {
 
 function resolveIcon(item) {
   if (item.kind === 'home') return Home;
+  if (item.label === 'Desktop') return Monitor;
   if (item.label === 'Downloads') return Download;
   if (item.label === 'Documents') return FileText;
+  if (item.label === 'Pictures') return PictureInPicture2;
+  if (item.label === 'Music') return Music;
+  if (item.label === 'Videos') return Video;
   if (item.kind === 'trash') return Trash2;
   if (item.kind === 'device_removable') return Usb;
   if (item.kind === 'device') return HardDrive;

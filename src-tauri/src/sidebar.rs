@@ -64,20 +64,17 @@ pub fn build_sidebar() -> Vec<SidebarSection> {
     add_dir_if_exists(&mut favorites, "Pictures", home.join("Pictures"));
     add_dir_if_exists(&mut favorites, "Music", home.join("Music"));
     add_dir_if_exists(&mut favorites, "Videos", home.join("Videos"));
+
+    favorites.push(SidebarItem {
+      label: "Trash".to_string(),
+      path: "fm://trash".to_string(),
+      kind: "trash".to_string(),
+    });
   }
 
   sections.push(SidebarSection {
     title: format!("User ({})", username),
     items: favorites,
-  });
-
-  sections.push(SidebarSection {
-    title: "System".to_string(),
-    items: vec![SidebarItem {
-      label: "Trash".to_string(),
-      path: "fm://trash".to_string(),
-      kind: "trash".to_string(),
-    }],
   });
 
   let mut drives: Vec<SidebarItem> = Vec::new();
