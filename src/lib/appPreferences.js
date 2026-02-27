@@ -57,6 +57,13 @@ export async function pushManualPath(path) {
   await store.save();
 }
 
+export async function clearManualPathHistory() {
+  const store = getPreferencesStore();
+  if (!store) return;
+  await store.set(KEY_MANUAL_HISTORY, []);
+  await store.save();
+}
+
 export async function removeManualPath(path) {
   const store = getPreferencesStore();
   if (!store) return;

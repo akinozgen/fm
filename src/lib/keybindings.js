@@ -4,7 +4,10 @@ export function setupKeybindings({
   onNavigateForward,
   onNewFolder,
   onFocusAddressBar,
-  onRefresh
+  onRefresh,
+  onCut,
+  onCopy,
+  onPaste
 }) {
   const onKeyDown = (event) => {
     const target = event.target;
@@ -26,6 +29,21 @@ export function setupKeybindings({
       if (event.key.toLowerCase() === 'r') {
         event.preventDefault();
         onRefresh?.();
+        return;
+      }
+      if (event.key.toLowerCase() === 'x') {
+        event.preventDefault();
+        onCut?.();
+        return;
+      }
+      if (event.key.toLowerCase() === 'c') {
+        event.preventDefault();
+        onCopy?.();
+        return;
+      }
+      if (event.key.toLowerCase() === 'v') {
+        event.preventDefault();
+        onPaste?.();
         return;
       }
     }

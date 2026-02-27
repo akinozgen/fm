@@ -37,6 +37,7 @@
             class="tree-item"
             :class="{ active: isActive(item.path) }"
             @click="$emit('navigate', item.path)"
+            @contextmenu.prevent="onItemContextMenu($event, item)"
           >
             <component :is="resolveIcon(item)" :size="14" />
             <span>{{ item.label }}</span>
@@ -69,6 +70,7 @@ import {
 } from 'lucide-vue-next';
 import { computed, reactive } from 'vue';
 import { getVirtualPathLabel, isVirtualPath, normalizePath } from '../lib/virtualPaths';
+import { showNativeFileContextMenu } from '../lib/contextMenu';
 
 const emit = defineEmits(['resize-start', 'navigate', 'go-welcome', 'quick-add']);
 const props = defineProps({
@@ -104,6 +106,16 @@ function resolveIcon(item) {
 
 function isActive(path) {
   return normalizePath(path) === normalizePath(props.currentPath);
+}
+
+function onItemContextMenu(event, item) {
+  if (isVirtualPath(item.path)) return;
+  void showNativeFileContextMenu({
+    x: event.clientX,
+    y: event.clientY,
+    kind: 'sidebar_item',
+    paths: [item.path]
+  });
 }
 
 function goHome() {

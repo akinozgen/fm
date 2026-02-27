@@ -66,6 +66,9 @@ async function flushBatch() {
 export function clearThumbnailQueue() {
   const dropped = pendingBatch.splice(0);
   for (const { reject } of dropped) reject(CANCELLED);
+  // Signal Rust to stop the in-flight batch — the bounded pool checks this flag
+  // between items so currently-decoding images finish but nothing new starts.
+  invoke('cancel_thumbnails_cmd').catch(() => {});
 }
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -19,7 +19,7 @@
         :key="entry.path"
         class="tile"
         :data-path="entry.path"
-        :class="{ folder: entry.is_dir, file: !entry.is_dir, selected: isSelected(entry.path), cursor: isCursor(index), 'with-checkbox': showSelectionCheckboxes }"
+        :class="{ folder: entry.is_dir, file: !entry.is_dir, selected: isSelected(entry.path), cursor: isCursor(index), 'with-checkbox': showSelectionCheckboxes, 'entry-cut': cutPaths.includes(entry.path) }"
         :title="truncatedTitle(entry.name, 24, entry.is_dir)"
         @click.stop="handleItemClick(entry, index, $event)"
         @dblclick.stop="openEntry(entry)"
@@ -60,7 +60,7 @@
         :key="entry.path"
         class="list-row"
         :data-path="entry.path"
-        :class="{ folder: entry.is_dir, file: !entry.is_dir, selected: isSelected(entry.path), cursor: isCursor(index), 'with-checkbox': showSelectionCheckboxes }"
+        :class="{ folder: entry.is_dir, file: !entry.is_dir, selected: isSelected(entry.path), cursor: isCursor(index), 'with-checkbox': showSelectionCheckboxes, 'entry-cut': cutPaths.includes(entry.path) }"
         :title="truncatedTitle(entry.name, 52, entry.is_dir)"
         @click.stop="handleItemClick(entry, index, $event)"
         @dblclick.stop="openEntry(entry)"
@@ -152,6 +152,10 @@ const props = defineProps({
   gridZoom: {
     type: Number,
     default: 110
+  },
+  cutPaths: {
+    type: Array,
+    default: () => []
   }
 });
 const { viewMode, entries, loading, showExtensions, showSelectionCheckboxes } = toRefs(props);
@@ -164,7 +168,7 @@ const gridStyle = computed(() => ({
   '--grid-icon-size': `${gridIconSize.value}px`
 }));
 
-const emit = defineEmits(['open-dir', 'open-file', 'selection-change', 'remove-draft']);
+const emit = defineEmits(['open-dir', 'open-file', 'selection-change', 'remove-draft', 'show-properties']);
 const selectedPaths = ref(new Set());
 const anchorIndex = ref(null);
 const cursorIndex = ref(-1);
@@ -632,13 +636,38 @@ function onContentPointerCancel(event) {
 }
 
 function onContentContextMenu(event) {
-  const context = resolveFileContextTarget(event, entries.value);
-  void showNativeFileContextMenu({
-    x: event.clientX,
-    y: event.clientY,
-    kind: context.kind,
-    path: context.path
-  });
+  const target = resolveFileContextTarget(event, entries.value);
+
+  if (target.kind === 'empty') {
+    void showNativeFileContextMenu({ x: event.clientX, y: event.clientY, kind: 'empty', paths: [] });
+    return;
+  }
+
+  // Auto-select the right-clicked item if not already in selection
+  if (target.path && !selectedPaths.value.has(target.path)) {
+    const idx = entries.value.findIndex((e) => e.path === target.path);
+    selectedPaths.value = new Set([target.path]);
+    anchorIndex.value = idx;
+    cursorIndex.value = idx;
+  }
+
+  const paths = Array.from(selectedPaths.value);
+  const sel = entries.value.filter((e) => selectedPaths.value.has(e.path));
+  const allFiles = sel.every((e) => !e.is_dir);
+  const allDirs = sel.every((e) => e.is_dir);
+
+  let kind;
+  if (paths.length === 1) {
+    kind = target.kind; // 'file' or 'dir'
+  } else if (allFiles) {
+    kind = 'files';
+  } else if (allDirs) {
+    kind = 'dirs';
+  } else {
+    kind = 'mixed';
+  }
+
+  void showNativeFileContextMenu({ x: event.clientX, y: event.clientY, kind, paths });
 }
 
 function onWindowKeyDown(event) {
@@ -671,6 +700,15 @@ function onWindowKeyDown(event) {
   if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key === 'F2') {
     event.preventDefault();
     startRename();
+    return;
+  }
+
+  if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === 'Enter') {
+    const paths = Array.from(selectedPaths.value);
+    if (paths.length > 0) {
+      event.preventDefault();
+      emit('show-properties', paths);
+    }
     return;
   }
 

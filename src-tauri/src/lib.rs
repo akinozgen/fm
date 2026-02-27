@@ -1,6 +1,7 @@
 use std::error::Error as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_os = "windows"))]
 use std::time::UNIX_EPOCH;
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -8,15 +9,19 @@ use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State};
 
 mod core;
 mod context_menu;
+mod dir_size;
 mod icons;
 mod sidebar;
 mod storage;
 mod thumbnails;
+mod transfer;
 use core::{read_dir, walk_dir, CancelFlag, FileCoreState, ReadOptions};
-use context_menu::{show_file_context_menu_cmd, FileContextMenuState};
+use context_menu::{show_file_context_menu_cmd, ContextMenuState};
+use dir_size::{cancel_dir_size_cmd, compute_dir_size_cmd, DirSizeState};
 use icons::get_file_icon_png_base64;
 use sidebar::build_sidebar;
 use storage::{bootstrap_storage, StoragePaths};
+use thumbnails::ThumbnailState;
 use tauri::menu::{Menu, MenuItem};
 
 struct AddressMenuState {
@@ -129,17 +134,25 @@ fn get_file_icon_cmd(path: String, size: Option<u16>) -> Result<String, String> 
 #[tauri::command]
 async fn get_thumbnails_batch_cmd(
   storage: State<'_, StorageState>,
+  thumb_state: State<'_, ThumbnailState>,
   paths: Vec<String>,
   size: u32,
 ) -> Result<Vec<Option<String>>, String> {
   let thumb_dir = PathBuf::from(&storage.paths.config_dir).join("thumbnails");
-  let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-  let thread_pool = Arc::new(rayon::ThreadPoolBuilder::new().build().unwrap());
+  // Reset cancel flag so a fresh batch runs to completion unless interrupted.
+  thumb_state.cancel.store(false, std::sync::atomic::Ordering::SeqCst);
+  let cancel = thumb_state.cancel.clone();
+  let pool = thumb_state.pool.clone();
   tokio::task::spawn_blocking(move || {
-    thumbnails::get_thumbnails_parallel(&paths, size, &thumb_dir, &cancel_flag, &thread_pool)
+    thumbnails::get_thumbnails_parallel(&paths, size, &thumb_dir, &cancel, &pool)
   })
   .await
   .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn cancel_thumbnails_cmd(thumb_state: State<'_, ThumbnailState>) {
+  thumb_state.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -302,18 +315,60 @@ fn delete_paths_cmd(paths: Vec<String>, permanent: Option<bool>) -> Result<u32, 
     };
 
     let result = if permanent {
-      if meta.is_dir() {
-        std::fs::remove_dir_all(&path)
-      } else {
-        std::fs::remove_file(&path)
+      // On Windows, items listed from the Recycle Bin have paths inside
+      // $Recycle.Bin. Use purge_all so both the $R data file and the $I
+      // metadata file are removed and the shell is notified.
+      #[cfg(target_os = "windows")]
+      {
+        let in_recycle_bin = path
+          .to_string_lossy()
+          .to_lowercase()
+          .contains("\\$recycle.bin\\");
+        if in_recycle_bin {
+          match trash::os_limited::list() {
+            Ok(items) => {
+              let matching: Vec<_> =
+                items.into_iter().filter(|i| PathBuf::from(&i.id) == path).collect();
+              if !matching.is_empty() {
+                trash::os_limited::purge_all(matching).map_err(std::io::Error::other)
+              } else {
+                // Not found in trash list — delete directly as fallback
+                if meta.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }
+              }
+            }
+            Err(e) => Err(std::io::Error::other(e)),
+          }
+        } else {
+          if meta.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }
+        }
+      }
+      #[cfg(not(target_os = "windows"))]
+      {
+        if meta.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) }
       }
     } else {
-      trash::delete(&path).map_err(std::io::Error::other)
+      let mut result = trash::delete(&path).map_err(std::io::Error::other);
+      if result.is_err() {
+        let err_str = result.as_ref().unwrap_err().to_string();
+        if err_str.contains("aborted") || err_str.contains("in use") || err_str.contains("access") {
+          std::thread::sleep(std::time::Duration::from_millis(400));
+          result = trash::delete(&path).map_err(std::io::Error::other);
+        }
+      }
+      result
     };
 
     match result {
       Ok(_) => deleted += 1,
-      Err(e) => errors.push(format!("{raw}: {e}")),
+      Err(e) => {
+        let msg = e.to_string();
+        let friendly = if msg.contains("aborted") || msg.contains("Some operations were aborted") {
+          "File may be in use (e.g. after cancelling a copy). Try again in a moment or use permanent delete."
+        } else {
+          msg.as_str()
+        };
+        errors.push(format!("{raw}: {friendly}"));
+      }
     }
   }
 
@@ -324,6 +379,7 @@ fn delete_paths_cmd(paths: Vec<String>, permanent: Option<bool>) -> Result<u32, 
   }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn trash_root_dir() -> Result<PathBuf, String> {
   let Some(_base) = directories::BaseDirs::new() else {
     return Err("unable to resolve home directory".to_string());
@@ -343,6 +399,7 @@ fn trash_root_dir() -> Result<PathBuf, String> {
   }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn to_dir_entry_info(path: &std::path::Path, metadata: std::fs::Metadata) -> core::DirEntryInfo {
   let name = path
     .file_name()
@@ -371,27 +428,58 @@ fn to_dir_entry_info(path: &std::path::Path, metadata: std::fs::Metadata) -> cor
 
 #[tauri::command]
 fn list_trash_entries_cmd() -> Result<Vec<core::DirEntryInfo>, String> {
-  let root = trash_root_dir()?;
-  if !root.exists() {
-    return Ok(Vec::new());
-  }
-  if !root.is_dir() {
-    return Err("trash location is not a directory".to_string());
+  #[cfg(target_os = "windows")]
+  {
+    let items = trash::os_limited::list().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for item in &items {
+      // item.id is the full path of the $R* file inside $Recycle.Bin
+      let rb_path = PathBuf::from(&item.id);
+      let is_dir = rb_path.is_dir();
+      let size = if !is_dir { std::fs::metadata(&rb_path).ok().map(|m| m.len()) } else { None };
+      // time_deleted is a Unix timestamp in seconds
+      let modified_ms = if item.time_deleted > 0 {
+        Some((item.time_deleted as u128).saturating_mul(1000))
+      } else {
+        None
+      };
+      let name_str = item.name.to_string_lossy().to_string();
+      let ext = std::path::Path::new(&item.name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string());
+      out.push(core::DirEntryInfo {
+        path: rb_path.to_string_lossy().to_string(),
+        name: name_str,
+        is_dir,
+        size,
+        modified_ms,
+        ext,
+        hidden: false,
+      });
+    }
+    return Ok(out);
   }
 
-  let mut out = Vec::new();
-  let entries = std::fs::read_dir(&root).map_err(|e| e.to_string())?;
-  for entry in entries {
-    let Ok(entry) = entry else {
-      continue;
-    };
-    let path = entry.path();
-    let Ok(metadata) = entry.metadata() else {
-      continue;
-    };
-    out.push(to_dir_entry_info(&path, metadata));
+  #[cfg(not(target_os = "windows"))]
+  {
+    let root = trash_root_dir()?;
+    if !root.exists() {
+      return Ok(Vec::new());
+    }
+    if !root.is_dir() {
+      return Err("trash location is not a directory".to_string());
+    }
+    let mut out = Vec::new();
+    let entries = std::fs::read_dir(&root).map_err(|e| e.to_string())?;
+    for entry in entries {
+      let Ok(entry) = entry else { continue };
+      let path = entry.path();
+      let Ok(metadata) = entry.metadata() else { continue };
+      out.push(to_dir_entry_info(&path, metadata));
+    }
+    Ok(out)
   }
-  Ok(out)
 }
 
 #[tauri::command]
@@ -507,15 +595,19 @@ pub fn run() {
   tauri::Builder::default()
     .manage(Arc::new(FileCoreState::new()))
     .manage(AddressMenuState::new())
-    .manage(FileContextMenuState::new())
     .manage(DirWatchState::new())
     .manage(StorageState::new(storage_paths))
+    .manage(ThumbnailState::new())
+    .manage(DirSizeState::new())
+    .manage(ContextMenuState::new())
+    .manage(transfer::TransferState::new())
     .invoke_handler(tauri::generate_handler![
       read_dir_cmd,
       walk_dir_cmd,
       cancel_cmd,
       get_file_icon_cmd,
       get_thumbnails_batch_cmd,
+      cancel_thumbnails_cmd,
       get_sidebar_cmd,
       get_storage_paths_cmd,
       open_path_cmd,
@@ -530,7 +622,13 @@ pub fn run() {
       start_dir_watch_cmd,
       stop_dir_watch_cmd,
       show_address_menu_cmd,
-      show_file_context_menu_cmd
+      show_file_context_menu_cmd,
+      compute_dir_size_cmd,
+      cancel_dir_size_cmd,
+      transfer::paste_cmd,
+      transfer::cancel_transfer_cmd,
+      transfer::pause_transfer_cmd,
+      transfer::resume_transfer_cmd
     ])
     .setup(|app| {
       let handle = app.handle();
@@ -561,8 +659,8 @@ pub fn run() {
         let _ = app.emit("fm://address-menu", "copy");
       } else if event.id() == "address.clear" {
         let _ = app.emit("fm://address-menu", "clear");
-      } else if event.id() == "context.info" {
-        context_menu::emit_last_click(app);
+      } else if event.id().as_ref().starts_with("context.") {
+        context_menu::handle_menu_event(app, event.id().as_ref());
       }
     })
     .run(tauri::generate_context!())

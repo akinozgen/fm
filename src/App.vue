@@ -14,6 +14,7 @@
         :current-path="currentPath"
         :manual-history="manualPathHistory"
         :view-mode="viewMode"
+        :transfer-jobs="transferJobs"
         @update:view-mode="onViewModeChange"
         @navigate-up="navigateUp"
         @navigate-back="navigateBack"
@@ -21,22 +22,41 @@
         @navigate-path="navigateTo"
         @navigate-path-manual="navigateToFromManual"
         @delete-manual-history="deleteManualHistoryPath"
+        @cancel-transfer="onCancelTransfer"
+        @pause-transfer="onPauseTransfer"
+        @resume-transfer="onResumeTransfer"
       />
-      <ActionToolbar
-        v-if="!showWelcome"
-        :show-hidden="showHidden"
-        :show-extensions="showExtensions"
-        :show-selection-checkboxes="showSelectionCheckboxes"
+      <TrashToolbar
+        v-if="!showWelcome && isTrashView"
+        :selected-count="selectedEntries.length"
+        :can-empty-trash="canEmptyTrash"
         :on-delete="deleteSelected"
         :on-empty-trash="emptyTrash"
-        :is-trash-view="isTrashView"
-        :can-empty-trash="canEmptyTrash"
-        @update:show-hidden="setShowHidden"
-        @update:show-extensions="setShowExtensions"
-        @update:show-selection-checkboxes="setShowSelectionCheckboxes"
         @select-all="selectAll"
         @deselect-all="deselectAll"
         @select-inverse="selectInverse"
+      />
+      <ActionToolbar
+        v-else-if="!showWelcome"
+        :show-hidden="showHidden"
+        :show-extensions="showExtensions"
+        :show-selection-checkboxes="showSelectionCheckboxes"
+        :selected-count="selectedEntries.length"
+        :sort-by="sortBy"
+        :sort-dir="sortDir"
+        :on-delete="deleteSelected"
+        :can-paste="!!clipboardPaths.length"
+        @update:show-hidden="setShowHidden"
+        @update:show-extensions="setShowExtensions"
+        @update:show-selection-checkboxes="setShowSelectionCheckboxes"
+        @update:sort-by="setSortBy"
+        @update:sort-dir="setSortDir"
+        @select-all="selectAll"
+        @deselect-all="deselectAll"
+        @select-inverse="selectInverse"
+        @cut="onCut"
+        @copy="onCopy"
+        @paste="onPaste"
       />
       <WelcomePage
         v-if="showWelcome"
@@ -57,10 +77,12 @@
         :create-file="createFile"
         :create-folder="createFolder"
         :request-delete="deleteSelected"
+        :cut-paths="clipboardOp === 'cut' ? clipboardPaths : []"
         @open-dir="navigateTo"
         @open-file="openFile"
         @selection-change="onSelectionChange"
         @remove-draft="removeDraftEntry"
+        @show-properties="onShowProperties"
       />
       <StatusBar
         :shown-count="sortedEntries.length"
@@ -68,6 +90,8 @@
         :show-selected-size="showSelectionSize"
         :selected-size-bytes="selectionSizeBytes"
       />
+      <div v-if="propertiesEntries.length" class="props-backdrop" @click="propertiesEntries = []" />
+      <DetailsPane :entries="propertiesEntries" @close="propertiesEntries = []" />
     </main>
   </div>
 </template>
@@ -78,9 +102,12 @@ import { listen } from '@tauri-apps/api/event';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import ActionToolbar from './components/ActionToolbar.vue';
+import DetailsPane from './components/DetailsPane.vue';
 import MainContent from './components/MainContent.vue';
 import StatusBar from './components/StatusBar.vue';
+import TrashToolbar from './components/TrashToolbar.vue';
 import {
+  clearManualPathHistory,
   getDirectoryPrefs,
   loadGlobalPrefs,
   loadManualPathHistory,
@@ -91,6 +118,7 @@ import {
 } from './lib/appPreferences';
 import { clearThumbnailQueue } from './lib/iconCache';
 import { listenFileContextMenu } from './lib/contextMenu';
+import { paste, cancelTransfer, pauseTransfer, resumeTransfer, listenTransferProgress, listenTransferDone } from './lib/transfer';
 import { setupKeybindings } from './lib/keybindings';
 import { bootstrapPreferencesStore } from './lib/preferencesStore';
 import {
@@ -108,6 +136,8 @@ import Toolbar from './components/Toolbar.vue';
 import WelcomePage from './components/WelcomePage.vue';
 
 const viewMode = ref('list');
+const sortBy  = ref('name'); // 'name' | 'type' | 'size' | 'modified'
+const sortDir = ref('asc');  // 'asc' | 'desc'
 const gridZoom = ref(110); // tile cell min-width in px; icon size derived from this
 const sidebarWidth = ref(220);
 const sidebarSections = ref([]);
@@ -122,7 +152,12 @@ const showWelcome = ref(true);
 const manualPathHistory = ref([]);
 const mainContentRef = ref(null);
 const toolbarRef = ref(null);
+const propertiesEntries = ref([]);
 const selectedPaths = ref([]);
+
+const clipboardPaths   = ref([]);
+const clipboardOp      = ref('');  // 'cut' | 'copy' | ''
+const transferJobs     = ref([]);  // { id, op, done, total, bytes_done, bytes_total, current, paused }[]
 
 const pathHistory = ref([]);
 const historyIndex = ref(-1);
@@ -133,14 +168,29 @@ let teardownKeybindings = () => {};
 let directoryWatchDebounceTimer = 0;
 
 const sortedEntries = computed(() => {
+  const dir = sortDir.value === 'asc' ? 1 : -1;
   return [...entries.value].sort((a, b) => {
-    if (!!a.draft !== !!b.draft) {
-      return a.draft ? -1 : 1;
+    // Drafts always first
+    if (!!a.draft !== !!b.draft) return a.draft ? -1 : 1;
+    // Folders always before files
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+
+    let primary = 0;
+    if (sortBy.value === 'name') {
+      primary = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    } else if (sortBy.value === 'type') {
+      const extA = (a.ext || '').toLowerCase();
+      const extB = (b.ext || '').toLowerCase();
+      primary = extA.localeCompare(extB, undefined, { sensitivity: 'base' });
+      if (primary === 0) primary = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    } else if (sortBy.value === 'size') {
+      primary = (a.size ?? 0) - (b.size ?? 0);
+      if (primary === 0) primary = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    } else if (sortBy.value === 'modified') {
+      primary = (Number(a.modified_ms) || 0) - (Number(b.modified_ms) || 0);
+      if (primary === 0) primary = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
     }
-    if (a.is_dir !== b.is_dir) {
-      return a.is_dir ? -1 : 1;
-    }
-    return a.name.localeCompare(b.name);
+    return primary * dir;
   });
 });
 
@@ -230,6 +280,7 @@ async function navigateTo(path, options = {}) {
   entries.value = [];
   clearThumbnailQueue();
   selectedPaths.value = [];
+  propertiesEntries.value = [];
   loading.value = true;
 
   if (isTrashPath(nextPath)) {
@@ -257,6 +308,8 @@ async function navigateTo(path, options = {}) {
   if (dirPrefs?.viewMode === 'grid' || dirPrefs?.viewMode === 'list') {
     viewMode.value = dirPrefs.viewMode;
   }
+  sortBy.value = dirPrefs?.sortBy || 'name';
+  sortDir.value = (dirPrefs?.sortDir === 'asc' || dirPrefs?.sortDir === 'desc') ? dirPrefs.sortDir : 'asc';
 
   if (shouldRecordHistory) {
     recordHistory(nextPath);
@@ -430,6 +483,20 @@ async function setShowSelectionCheckboxes(value) {
   await persistGlobalPrefs();
 }
 
+async function setSortBy(value) {
+  sortBy.value = value;
+  if (currentPath.value) {
+    await setDirectoryPrefs(currentPath.value, { sortBy: value });
+  }
+}
+
+async function setSortDir(value) {
+  sortDir.value = value;
+  if (currentPath.value) {
+    await setDirectoryPrefs(currentPath.value, { sortDir: value });
+  }
+}
+
 function selectAll() {
   mainContentRef.value?.selectAllItems?.();
 }
@@ -450,12 +517,17 @@ async function deleteSelected(options = {}) {
   if (!currentPath.value) return;
   const fromTrashView = isTrashView.value;
   const permanent = !!options.permanent || fromTrashView;
-  const selectedFromView = mainContentRef.value?.getSelectedPaths?.() || [];
-  const cursorPath = mainContentRef.value?.getCursorPath?.() || '';
-  const effectiveSelection = selectedFromView.length > 0 ? selectedFromView : selectedPaths.value;
-  const targets = effectiveSelection.filter((path) => typeof path === 'string' && path && !isDraftPath(path));
-  if (targets.length === 0 && cursorPath && !isDraftPath(cursorPath)) {
-    targets.push(cursorPath);
+  let targets;
+  if (Array.isArray(options.targets) && options.targets.length > 0) {
+    targets = options.targets.filter((path) => typeof path === 'string' && path && !isDraftPath(path));
+  } else {
+    const selectedFromView = mainContentRef.value?.getSelectedPaths?.() || [];
+    const cursorPath = mainContentRef.value?.getCursorPath?.() || '';
+    const effectiveSelection = selectedFromView.length > 0 ? selectedFromView : selectedPaths.value;
+    targets = effectiveSelection.filter((path) => typeof path === 'string' && path && !isDraftPath(path));
+    if (targets.length === 0 && cursorPath && !isDraftPath(cursorPath)) {
+      targets.push(cursorPath);
+    }
   }
   if (targets.length === 0) return;
 
@@ -480,6 +552,9 @@ async function deleteSelected(options = {}) {
     await invoke('delete_paths_cmd', { paths: targets, permanent });
   } catch (error) {
     console.error('delete failed', error);
+    const { message } = await import('@tauri-apps/plugin-dialog');
+    const text = typeof error === 'string' ? error : (error?.message ?? String(error));
+    await message(text, { title: 'Delete failed', kind: 'error' });
   } finally {
     await navigateTo(currentPath.value, {
       shouldRecordHistory: false,
@@ -586,6 +661,62 @@ async function persistGlobalPrefs() {
   });
 }
 
+function onCut() {
+  if (!selectedPaths.value.length) return;
+  clipboardPaths.value = selectedPaths.value.slice();
+  clipboardOp.value = 'cut';
+}
+
+function onCopy() {
+  if (!selectedPaths.value.length) return;
+  clipboardPaths.value = selectedPaths.value.slice();
+  clipboardOp.value = 'copy';
+}
+
+async function onPaste() {
+  if (!clipboardPaths.value.length || showWelcome.value || isTrashView.value) return;
+  const op = clipboardOp.value === 'cut' ? 'move' : 'copy';
+  const total = clipboardPaths.value.length;
+  try {
+    const jobId = await paste(clipboardPaths.value, currentPath.value, op);
+    transferJobs.value = [
+      ...transferJobs.value,
+      {
+        id: jobId,
+        op,
+        done: 0,
+        total,
+        bytes_done: 0,
+        bytes_total: 0,
+        current: '',
+        paused: false
+      }
+    ];
+  } catch (e) {
+    console.error('paste failed', e);
+  }
+  if (op === 'move') {
+    clipboardPaths.value = [];
+    clipboardOp.value = '';
+  }
+}
+
+function onCancelTransfer(jobId) {
+  cancelTransfer(jobId);
+}
+
+function onPauseTransfer(jobId) {
+  const job = transferJobs.value.find((j) => j.id === jobId);
+  if (job) job.paused = true;
+  pauseTransfer(jobId);
+}
+
+function onResumeTransfer(jobId) {
+  const job = transferJobs.value.find((j) => j.id === jobId);
+  if (job) job.paused = false;
+  resumeTransfer(jobId);
+}
+
 async function hookEvents() {
   const unlistenMenu = await listen('fm://address-menu', async (event) => {
     if (event.payload === 'copy') {
@@ -594,6 +725,8 @@ async function hookEvents() {
     if (event.payload === 'clear') {
       pathHistory.value = [];
       historyIndex.value = -1;
+      manualPathHistory.value = [];
+      await clearManualPathHistory();
     }
   });
 
@@ -638,11 +771,87 @@ async function hookEvents() {
   });
 
   const unlistenContextInfo = await listenFileContextMenu((payload) => {
-    if (!payload.kind) return;
-    console.info('file context menu click', payload);
+    const { action, kind, paths = [] } = payload;
+    if (!action) return;
+    const singlePath = paths[0] ?? null;
+    if (action === 'open') {
+      if (!singlePath) return;
+      if (kind === 'dir' || kind === 'sidebar_item') navigateTo(singlePath);
+      else void openFile(singlePath);
+    } else if (action === 'new_folder') {
+      startCreateFolderDraft();
+    } else if (action === 'new_file') {
+      startCreateFileDraft();
+    } else if (action === 'refresh') {
+      refreshCurrentView();
+    } else if (action === 'delete') {
+      void deleteSelected(paths.length > 0 ? { targets: paths } : {});
+    } else if (action === 'rename') {
+      if (singlePath) mainContentRef.value?.startDraftRename?.(singlePath);
+    } else if (action === 'cut') {
+      clipboardPaths.value = paths.slice();
+      clipboardOp.value = 'cut';
+    } else if (action === 'copy') {
+      clipboardPaths.value = paths.slice();
+      clipboardOp.value = 'copy';
+    } else if (action === 'paste') {
+      void onPaste();
+    } else if (action === 'properties') {
+      const found = paths.map((p) => {
+        const existing = entries.value.find((e) => e.path === p);
+        if (existing) return existing;
+        // Synthesize for paths outside the current listing (e.g. sidebar items)
+        if (!p) return null;
+        const sep = p.includes('\\') ? '\\' : '/';
+        const name = p.split(sep).filter(Boolean).pop() || p;
+        const isDir = kind === 'dir' || kind === 'sidebar_item' || kind === 'dirs';
+        return { path: p, name, is_dir: isDir, ext: null, size: null, modified_ms: null };
+      }).filter(Boolean);
+      propertiesEntries.value = found;
+    }
   });
 
-  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo);
+  const unlistenProgress = await listenTransferProgress((p) => {
+    const jobId = p.job_id ?? p.jobId;
+    if (jobId == null) return;
+    const job = transferJobs.value.find((j) => j.id === jobId);
+    if (job) {
+      job.op = p.op ?? job.op;
+      job.done = p.done ?? 0;
+      job.total = p.total ?? job.total;
+      job.bytes_done = p.bytes_done ?? 0;
+      job.bytes_total = p.bytes_total ?? job.bytes_total;
+      job.current = p.current ?? '';
+    }
+  });
+  const unlistenDone = await listenTransferDone((d) => {
+    const jobId = d.job_id ?? d.jobId;
+    if (jobId != null) {
+      transferJobs.value = transferJobs.value.filter((j) => j.id !== jobId);
+    }
+    if (!d.cancelled) refreshCurrentView();
+    if (d.errors && d.errors.length) console.error('Transfer errors:', d.errors);
+  });
+
+  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo, unlistenProgress, unlistenDone);
+}
+
+function onAppKeyDown(event) {
+  if (event.key !== 'Escape') return;
+  if (propertiesEntries.value.length) {
+    propertiesEntries.value = [];
+    event.preventDefault();
+    return;
+  }
+  if (selectedPaths.value.length > 0) {
+    mainContentRef.value?.deselectAllItems?.();
+    event.preventDefault();
+  }
+}
+
+function onShowProperties(paths) {
+  const found = paths.map((p) => entries.value.find((e) => e.path === p)).filter(Boolean);
+  if (found.length > 0) propertiesEntries.value = found;
 }
 
 // ── Grid zoom (Ctrl+scroll) ───────────────────────────────────────────────────
@@ -668,6 +877,7 @@ function onGridZoomWheel(e) {
 onMounted(async () => {
   document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth.value}px`);
   window.addEventListener('wheel', onGridZoomWheel, { passive: false });
+  window.addEventListener('keydown', onAppKeyDown);
   try {
     await bootstrapPreferencesStore();
   } catch (error) {
@@ -680,7 +890,10 @@ onMounted(async () => {
     onNavigateForward: navigateForward,
     onNewFolder: startCreateFolderDraft,
     onFocusAddressBar: () => toolbarRef.value?.startAddressEditing?.(),
-    onRefresh: refreshCurrentView
+    onRefresh: refreshCurrentView,
+    onCut,
+    onCopy,
+    onPaste
   });
   await hookEvents();
   await loadSidebar();
@@ -688,6 +901,7 @@ onMounted(async () => {
 
 onBeforeUnmount(async () => {
   window.removeEventListener('wheel', onGridZoomWheel);
+  window.removeEventListener('keydown', onAppKeyDown);
   if (gridZoomSaveTimer) clearTimeout(gridZoomSaveTimer);
   resizing = false;
   if (directoryWatchDebounceTimer) {
