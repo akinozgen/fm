@@ -3,10 +3,17 @@
     <span class="statusbar-item">Items: {{ shownCount }}</span>
     <span class="statusbar-item">Selected: {{ selectedCount }}</span>
     <span v-if="showSelectedSize" class="statusbar-item">Selection Size: {{ formatSize(selectedSizeBytes) }}</span>
+    <div
+      class="statusbar-resize-handle"
+      title="Resize window"
+      @mousedown.prevent="onResizeHandleDown"
+    />
   </footer>
 </template>
 
 <script setup>
+import { getCurrentWindow } from '@tauri-apps/api/window';
+
 defineProps({
   shownCount: {
     type: Number,
@@ -25,6 +32,11 @@ defineProps({
     required: true
   }
 });
+
+function onResizeHandleDown(e) {
+  if (e.button !== 0) return;
+  void getCurrentWindow().startResizeDragging('SouthEast');
+}
 
 function formatSize(size) {
   if (!Number.isFinite(size) || size <= 0) return '0 B';

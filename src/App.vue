@@ -1,17 +1,56 @@
 <template>
   <div class="app-shell">
+    <header class="app-titlebar" data-tauri-drag-region @mousedown="onTitlebarMousedown">
+      <div class="titlebar-left">
+        <button type="button" class="titlebar-brand" title="Home" @click="openWelcome">
+          <span class="titlebar-brand-icon"><FolderOpen :size="14" /></span>
+          <span class="titlebar-brand-name">fm</span>
+        </button>
+      </div>
+      <div class="titlebar-center">
+        <span class="titlebar-path" :title="currentPath">{{ titleBarLocationLabel }}</span>
+      </div>
+      <div class="titlebar-right">
+        <button type="button" class="titlebar-btn" title="Search path (F6)" @click="focusAddressBar">
+          <Search :size="14" />
+        </button>
+        <div ref="newItemWrapRef" class="titlebar-new-wrap">
+          <button
+            type="button"
+            class="titlebar-btn"
+            :class="{ active: newItemPopoutOpen }"
+            title="New file or folder"
+            @click.stop="newItemPopoutOpen = !newItemPopoutOpen"
+          >
+            <Plus :size="14" />
+          </button>
+          <div v-if="newItemPopoutOpen" class="titlebar-new-popout" @click.stop>
+            <button type="button" class="titlebar-new-option" @click="onNewFile">
+              <FileText :size="14" />
+              <span>New file</span>
+            </button>
+            <button type="button" class="titlebar-new-option" @click="onNewFolder">
+              <FolderPlus :size="14" />
+              <span>New folder</span>
+            </button>
+          </div>
+        </div>
+        <div class="titlebar-win-controls">
+          <WinControls />
+        </div>
+      </div>
+    </header>
     <Sidebar
       :sections="sidebarSections"
       :current-path="currentPath"
       @resize-start="startResize"
       @navigate="navigateTo"
-      @go-welcome="openWelcome"
-      @quick-add="startCreateFileDraft"
     />
     <main class="main">
       <Toolbar
         ref="toolbarRef"
         :current-path="currentPath"
+        :folder-entries="entries"
         :manual-history="manualPathHistory"
         :view-mode="viewMode"
         :transfer-jobs="transferJobs"
@@ -22,6 +61,7 @@
         @navigate-path="navigateTo"
         @navigate-path-manual="navigateToFromManual"
         @delete-manual-history="deleteManualHistoryPath"
+        @open-failed="onAddressBarOpenFailed"
         @cancel-transfer="onCancelTransfer"
         @pause-transfer="onPauseTransfer"
         @resume-transfer="onResumeTransfer"
@@ -116,6 +156,7 @@ import {
   saveGlobalPrefs,
   setDirectoryPrefs
 } from './lib/appPreferences';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { clearThumbnailQueue } from './lib/iconCache';
 import { listenFileContextMenu } from './lib/contextMenu';
 import { paste, cancelTransfer, pauseTransfer, resumeTransfer, listenTransferProgress, listenTransferDone } from './lib/transfer';
@@ -126,14 +167,18 @@ import {
   FM_WELCOME,
   canonicalizePath,
   createDraftPath,
+  getVirtualPathLabel,
   isDraftPath,
   isTrashPath,
+  isVirtualPath,
   isWelcomePath,
   normalizePath
 } from './lib/virtualPaths';
+import { FileText, FolderOpen, FolderPlus, Plus, Search } from 'lucide-vue-next';
 import Sidebar from './components/Sidebar.vue';
 import Toolbar from './components/Toolbar.vue';
 import WelcomePage from './components/WelcomePage.vue';
+import WinControls from './components/WinControls.vue';
 
 const viewMode = ref('list');
 const sortBy  = ref('name'); // 'name' | 'type' | 'size' | 'modified'
@@ -152,6 +197,8 @@ const showWelcome = ref(true);
 const manualPathHistory = ref([]);
 const mainContentRef = ref(null);
 const toolbarRef = ref(null);
+const newItemWrapRef = ref(null);
+const newItemPopoutOpen = ref(false);
 const propertiesEntries = ref([]);
 const selectedPaths = ref([]);
 
@@ -218,6 +265,17 @@ const selectionSizeBytes = computed(() => {
 
 const isTrashView = computed(() => isTrashPath(currentPath.value));
 const canEmptyTrash = computed(() => isTrashView.value && entries.value.length > 0);
+
+const titleBarLocationLabel = computed(() => {
+  const normalized = normalizePath(currentPath.value);
+  if (!normalized) return 'No location';
+  if (isVirtualPath(normalized)) {
+    return getVirtualPathLabel(normalized) || normalized;
+  }
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length === 0) return '/';
+  return parts[parts.length - 1];
+});
 
 function startResize(event) {
   resizing = true;
@@ -361,6 +419,30 @@ async function openWelcome(options = {}) {
   loading.value = false;
   if (shouldRecordHistory) {
     recordHistory(FM_WELCOME);
+  }
+}
+
+function focusAddressBar() {
+  toolbarRef.value?.startAddressEditing?.();
+}
+
+function onAddressBarOpenFailed(message) {
+  console.warn('[Address bar] Open failed:', message);
+}
+
+function onNewFile() {
+  newItemPopoutOpen.value = false;
+  void startCreateFileDraft();
+}
+
+function onNewFolder() {
+  newItemPopoutOpen.value = false;
+  void startCreateFolderDraft();
+}
+
+function onNewItemWindowClick(e) {
+  if (newItemPopoutOpen.value && newItemWrapRef.value && !newItemWrapRef.value.contains(e.target)) {
+    newItemPopoutOpen.value = false;
   }
 }
 
@@ -836,6 +918,78 @@ async function hookEvents() {
   unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo, unlistenProgress, unlistenDone);
 }
 
+// Keys that have no meaning in a file manager but trigger browser defaults.
+// Checked in capture phase so preventDefault() fires before any handler sees them.
+// Our own handlers (keybindings.js, MainContent) still receive the event normally.
+const BLOCKED_CTRL_KEYS = new Set([
+  'f',  // find bar
+  'p',  // print
+  's',  // save page
+  'u',  // view source
+  'l',  // browser address bar  (we use F6)
+  'd',  // bookmark
+  't',  // new tab
+  'n',  // new window           (Ctrl+Shift+N = our New Folder — not affected)
+  'w',  // close tab
+  'j',  // downloads (Chrome/Edge)
+  'g',  // find next
+  'k',  // search bar (Firefox)
+  'e',  // search bar (Chrome)
+]);
+
+function blockBrowserShortcuts(event) {
+  const ctrl = event.ctrlKey || event.metaKey;
+  const key  = event.key.toLowerCase();
+
+  // F11 — fullscreen toggle
+  if (!ctrl && !event.shiftKey && !event.altKey && event.key === 'F11') {
+    event.preventDefault();
+    return;
+  }
+
+  // F1 — browser help
+  if (!ctrl && !event.shiftKey && !event.altKey && event.key === 'F1') {
+    event.preventDefault();
+    return;
+  }
+
+  if (!ctrl || event.altKey) return;
+
+  // Ctrl-only shortcuts to block (shift must NOT be held, so Ctrl+Shift+N stays ours)
+  if (!event.shiftKey && BLOCKED_CTRL_KEYS.has(key)) {
+    event.preventDefault();
+    return;
+  }
+
+  // Browser zoom: Ctrl+- / Ctrl+= / Ctrl+0
+  if (!event.shiftKey && (key === '-' || key === '=' || key === '0')) {
+    event.preventDefault();
+  }
+}
+
+let titlebarPendingDrag = false;
+
+function onTitlebarMousedown(event) {
+  if (event.button !== 0) return;
+  if (event.target.closest('button, a, input, select, [role="button"]')) return;
+  const win = getCurrentWindow();
+  if (event.detail === 2) {
+    void win.isMaximized().then((max) => (max ? win.unmaximize() : win.maximize()));
+    return;
+  }
+  titlebarPendingDrag = true;
+}
+
+function onTitlebarMousemove() {
+  if (!titlebarPendingDrag) return;
+  titlebarPendingDrag = false;
+  void getCurrentWindow().startDragging();
+}
+
+function onTitlebarMouseup() {
+  titlebarPendingDrag = false;
+}
+
 function onAppKeyDown(event) {
   if (event.key !== 'Escape') return;
   if (propertiesEntries.value.length) {
@@ -877,7 +1031,11 @@ function onGridZoomWheel(e) {
 onMounted(async () => {
   document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth.value}px`);
   window.addEventListener('wheel', onGridZoomWheel, { passive: false });
+  window.addEventListener('keydown', blockBrowserShortcuts, { capture: true });
   window.addEventListener('keydown', onAppKeyDown);
+  window.addEventListener('click', onNewItemWindowClick);
+  window.addEventListener('mousemove', onTitlebarMousemove);
+  window.addEventListener('mouseup', onTitlebarMouseup);
   try {
     await bootstrapPreferencesStore();
   } catch (error) {
@@ -901,7 +1059,11 @@ onMounted(async () => {
 
 onBeforeUnmount(async () => {
   window.removeEventListener('wheel', onGridZoomWheel);
+  window.removeEventListener('keydown', blockBrowserShortcuts, { capture: true });
   window.removeEventListener('keydown', onAppKeyDown);
+  window.removeEventListener('click', onNewItemWindowClick);
+  window.removeEventListener('mousemove', onTitlebarMousemove);
+  window.removeEventListener('mouseup', onTitlebarMouseup);
   if (gridZoomSaveTimer) clearTimeout(gridZoomSaveTimer);
   resizing = false;
   if (directoryWatchDebounceTimer) {

@@ -1,5 +1,5 @@
 <template>
-  <div class="toolbar">
+  <div class="toolbar" data-tauri-drag-region>
     <div class="nav-group">
       <button class="icon-btn" title="Back" @click="$emit('navigate-back')"><ChevronLeft :size="14" /></button>
       <button class="icon-btn" title="Forward" @click="$emit('navigate-forward')"><ChevronRight :size="14" /></button>
@@ -8,10 +8,12 @@
     <AddressBar
       ref="addressBarRef"
       :current-path="currentPath"
+      :folder-entries="folderEntries"
       :manual-history="manualHistory"
       @navigate="(path) => $emit('navigate-path', path)"
       @navigate-manual="(path) => $emit('navigate-path-manual', path)"
       @delete-manual-history="(path) => $emit('delete-manual-history', path)"
+      @open-failed="(msg) => $emit('open-failed', msg)"
     />
     <div class="view-group">
       <div v-if="transferJobs.length > 0" ref="transferWrapRef" class="transfer-btn-wrap">
@@ -86,6 +88,7 @@ const emit = defineEmits([
   'navigate-path',
   'navigate-path-manual',
   'delete-manual-history',
+  'open-failed',
   'cancel-transfer',
   'pause-transfer',
   'resume-transfer'
@@ -94,6 +97,10 @@ const props = defineProps({
   currentPath: {
     type: String,
     required: true
+  },
+  folderEntries: {
+    type: Array,
+    default: () => []
   },
   manualHistory: {
     type: Array,

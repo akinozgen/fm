@@ -50,8 +50,170 @@ body * {
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width, 220px) 1fr auto;
+  grid-template-rows: auto 1fr;
   height: 100%;
   overflow: hidden;
+}
+
+.app-titlebar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: 1fr minmax(0, 2fr) 1fr;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 0 0 0 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin: 0 -4px 0 -2px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.titlebar-brand:hover {
+  background: var(--panel-muted);
+}
+
+.titlebar-brand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.titlebar-brand-name {
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.2px;
+  font-family: "JetBrains Mono", "Iosevka", "SFMono-Regular", Menlo, monospace;
+}
+
+.titlebar-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.titlebar-path {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+
+.titlebar-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.titlebar-btn:hover {
+  background: var(--panel-muted);
+  color: var(--ink);
+}
+
+.titlebar-new-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.titlebar-new-popout {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 6px;
+  min-width: 160px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  z-index: 100;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+.titlebar-new-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.titlebar-new-option:hover {
+  background: var(--panel-muted);
+}
+
+.titlebar-btn.active {
+  background: var(--panel-muted);
+  color: var(--ink);
+}
+
+.titlebar-win-controls {
+  display: flex;
+  align-items: center;
+  padding-left: 8px;
+  margin-left: 4px;
+  border-left: 1px solid var(--line);
+  padding-right: 10px;
+}
+
+.app-shell .sidebar {
+  grid-row: 2;
+}
+
+.app-shell > .main {
+  grid-row: 2;
 }
 
 .sidebar {
@@ -846,6 +1008,10 @@ body * {
   background: #edf2fb;
 }
 
+.path-history-item.dropdown-selected .path-history-go {
+  background: #e8ecf4;
+}
+
 .path-history-delete {
   width: 24px;
   height: 24px;
@@ -1195,6 +1361,37 @@ body * {
   white-space: nowrap;
 }
 
+.statusbar-resize-handle {
+  position: relative;
+  width: 20px;
+  min-width: 20px;
+  height: 100%;
+  margin: -4px -10px -4px 10px;
+  padding: 4px 4px 4px 10px;
+  cursor: nwse-resize !important;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Grip: 3 short diagonal lines (resize affordance) */
+.statusbar-resize-handle::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 12px;
+  height: 12px;
+  background-image:
+    linear-gradient(135deg, currentColor 0, currentColor 1.5px, transparent 1.5px),
+    linear-gradient(135deg, currentColor 0, currentColor 1.5px, transparent 1.5px),
+    linear-gradient(135deg, currentColor 0, currentColor 1.5px, transparent 1.5px);
+  background-size: 4px 10px, 4px 7px, 4px 4px;
+  background-position: right 0 bottom 0, right 3px bottom 3px, right 6px bottom 6px;
+  background-repeat: no-repeat;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 .sidebar-resizer {
   position: absolute;
   right: -4px;
@@ -1374,4 +1571,50 @@ body * {
   font-size: 9.5px;
   color: var(--muted);
   opacity: 0.9;
+}
+
+/* ── Window Controls ─────────────────────────────────────────────────────── */
+.titlebar-win-controls .win-controls {
+  padding-left: 0;
+  margin-left: 0;
+  border-left: none;
+}
+
+.win-controls {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 8px;
+  margin-left: 6px;
+  border-left: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.wc-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  padding: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.wc-btn:hover {
+  background: var(--panel-muted);
+  color: var(--ink);
+}
+
+.wc-close:hover {
+  background: #ff3b30 !important;
+  color: #fff !important;
+}
+
+.wc-min:hover,
+.wc-max:hover {
+  background: var(--panel-muted);
 }

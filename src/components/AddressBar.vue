@@ -19,27 +19,40 @@
         v-model="editValue"
         class="path-input"
         spellcheck="false"
-        @keydown.enter.prevent="submitPath"
+        autocomplete="off"
+        @keydown="onInputKeydown"
         @keydown.esc.prevent="cancelEditing"
         @blur="cancelEditing"
       />
     </div>
-    <div v-if="isEditing && filteredHistory.length > 0" class="path-history-dropdown">
+    <div v-if="isEditing && dropdownItems.length > 0" class="path-history-dropdown">
       <div
-        v-for="path in filteredHistory"
-        :key="path"
+        v-for="(item, idx) in dropdownItems"
+        :key="item.type === 'history' ? item.path : item.path"
         class="path-history-item"
+        :class="{ 'dropdown-selected': idx === dropdownHighlightIndex }"
       >
-        <button class="path-history-go" @mousedown.prevent="applyHistoryPath(path)">
-          {{ path }}
-        </button>
-        <button
-          class="path-history-delete"
-          title="Remove from recent paths"
-          @mousedown.prevent="removeHistoryPath(path)"
-        >
-          ×
-        </button>
+        <template v-if="item.type === 'history'">
+          <button class="path-history-go" @mousedown.prevent="applyHistoryPath(item.path)">
+            {{ item.path }}
+          </button>
+          <button
+            class="path-history-delete"
+            title="Remove from recent paths"
+            @mousedown.prevent="removeHistoryPath(item.path)"
+          >
+            ×
+          </button>
+        </template>
+        <template v-else>
+          <button
+            class="path-history-go path-autocomplete-item"
+            :title="item.path"
+            @mousedown.prevent="applyAutocompleteItem(item.path)"
+          >
+            {{ item.name }}
+          </button>
+        </template>
       </div>
     </div>
   </div>
@@ -49,12 +62,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { HardDrive, House, Trash2 } from 'lucide-vue-next';
-import { FM_TRASH, FM_WELCOME, getVirtualPathLabel, isTrashPath, isWelcomePath, normalizePath } from '../lib/virtualPaths';
+import { canonicalizePath, FM_TRASH, FM_WELCOME, getVirtualPathLabel, isTrashPath, isWelcomePath, normalizePath } from '../lib/virtualPaths';
 
 const props = defineProps({
   currentPath: {
     type: String,
     required: true
+  },
+  folderEntries: {
+    type: Array,
+    default: () => []
   },
   manualHistory: {
     type: Array,
@@ -62,12 +79,13 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['navigate', 'navigate-manual', 'delete-manual-history']);
+const emit = defineEmits(['navigate', 'navigate-manual', 'delete-manual-history', 'open-failed']);
 
 const isEditing = ref(false);
 const editValue = ref('');
 const pathInputRef = ref(null);
 const pathbarRef = ref(null);
+const dropdownHighlightIndex = ref(0);
 
 const crumbs = computed(() => {
   const raw = props.currentPath || '';
@@ -100,10 +118,11 @@ const crumbs = computed(() => {
 
   let current = '';
   if (winDriveMatch) {
-    current = winDriveMatch[0];
+    const driveRoot = `${winDriveMatch[0]}/`;
+    current = driveRoot;
     result.push({
       label: winDriveMatch[0],
-      path: current,
+      path: driveRoot,
       current: parts.length === 1
     });
     parts.shift();
@@ -140,6 +159,51 @@ const filteredHistory = computed(() => {
   const query = editValue.value.trim().toLowerCase();
   if (!query) return list.slice(0, 8);
   return list.filter((p) => p.toLowerCase().includes(query)).slice(0, 8);
+});
+
+const AUTOCOMPLETE_MAX_ITEMS = 80;
+
+/** Last segment of input for folder autocomplete (prefix match in current folder). */
+const autocompleteQuery = computed(() => {
+  const raw = editValue.value;
+  const sep = raw.includes('/') ? '/' : raw.includes('\\') ? '\\' : null;
+  const segment = sep ? raw.slice(raw.lastIndexOf(sep) + 1) : raw;
+  return segment.trim().toLowerCase();
+});
+
+/** True when input ends with path separator → show full folder list without typing. */
+const inputEndsWithSeparator = computed(() => {
+  const raw = editValue.value.trim();
+  return raw.endsWith('/') || raw.endsWith('\\');
+});
+
+const folderSuggestions = computed(() => {
+  if (!isEditing.value) return [];
+  const entries = (Array.isArray(props.folderEntries) ? props.folderEntries : []).filter(
+    (e) => !e.draft && e.name
+  );
+  const query = autocompleteQuery.value;
+  if (inputEndsWithSeparator.value) {
+    return entries.slice(0, AUTOCOMPLETE_MAX_ITEMS);
+  }
+  if (!query) return [];
+  return entries
+    .filter((e) => e.name.toLowerCase().startsWith(query))
+    .slice(0, AUTOCOMPLETE_MAX_ITEMS);
+});
+
+/** Unified dropdown: history when input unchanged/empty, folder autocomplete when trailing / or typing. */
+const dropdownItems = computed(() => {
+  if (!isEditing.value) return [];
+  const raw = editValue.value.trim();
+  const isUnchanged = raw === normalizePath(props.currentPath || '') || raw === '';
+  if (isUnchanged) {
+    return filteredHistory.value.map((p) => ({ type: 'history', path: p }));
+  }
+  if (folderSuggestions.value.length > 0) {
+    return folderSuggestions.value.map((e) => ({ type: 'folder', path: e.path, name: e.name }));
+  }
+  return filteredHistory.value.map((p) => ({ type: 'history', path: p }));
 });
 
 function openAddressMenu(event) {
@@ -180,14 +244,11 @@ async function submitPath() {
     return;
   }
 
-  const normalizedCandidate = normalizePath(rawCandidate);
-  if (isTrashPath(normalizedCandidate)) {
-    emit('navigate-manual', FM_TRASH);
-    cancelEditing();
-    return;
-  }
-  if (isWelcomePath(normalizedCandidate)) {
-    emit('navigate-manual', FM_WELCOME);
+  const normalized = normalizePath(rawCandidate);
+  const canonical = canonicalizePath(normalized);
+
+  if (canonical === FM_WELCOME || canonical === FM_TRASH) {
+    emit('navigate-manual', canonical);
     cancelEditing();
     return;
   }
@@ -202,6 +263,14 @@ async function submitPath() {
   const valid = await invoke('is_valid_dir_cmd', { path: candidate });
   if (valid) {
     emit('navigate-manual', candidate);
+    cancelEditing();
+    return;
+  }
+
+  try {
+    await invoke('open_or_run_cmd', { input: candidate });
+  } catch (err) {
+    emit('open-failed', typeof err === 'string' ? err : String(err));
   }
   cancelEditing();
 }
@@ -209,6 +278,44 @@ async function submitPath() {
 function applyHistoryPath(path) {
   emit('navigate-manual', path);
   cancelEditing();
+}
+
+function applyAutocompleteItem(path) {
+  emit('navigate-manual', path);
+  cancelEditing();
+}
+
+function onInputKeydown(e) {
+  const items = dropdownItems.value;
+  if (items.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      dropdownHighlightIndex.value = Math.min(dropdownHighlightIndex.value + 1, items.length - 1);
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      dropdownHighlightIndex.value = Math.max(0, dropdownHighlightIndex.value - 1);
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const idx = dropdownHighlightIndex.value;
+      if (idx >= 0 && idx < items.length) {
+        const item = items[idx];
+        if (item.type === 'history') {
+          applyHistoryPath(item.path);
+        } else {
+          applyAutocompleteItem(item.path);
+        }
+        return;
+      }
+    }
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    submitPath();
+  }
 }
 
 function removeHistoryPath(path) {
@@ -231,6 +338,10 @@ watch(
     }
   }
 );
+
+watch(dropdownItems, (items) => {
+  dropdownHighlightIndex.value = 0;
+});
 
 onMounted(() => {
   window.addEventListener('pointerdown', onWindowPointerDown, true);

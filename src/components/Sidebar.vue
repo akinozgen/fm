@@ -1,24 +1,5 @@
 <template>
   <aside class="sidebar">
-    <div class="sidebar-header">
-      <div class="sidebar-brand">
-        <button class="brand-badge brand-home-btn" title="Go Home" @click="goHome">
-          <FolderOpen :size="14" />
-        </button>
-        <div class="brand-copy">
-          <div class="brand">fm</div>
-          <div class="brand-subtitle">{{ currentLocationLabel }}</div>
-        </div>
-      </div>
-      <div class="sidebar-header-actions">
-        <button class="ghost-btn" title="Search">
-          <Search :size="13" />
-        </button>
-        <button class="ghost-btn" title="New File" @click="$emit('quick-add')">
-          <Plus :size="13" />
-        </button>
-      </div>
-    </div>
     <div class="treeview">
       <div
         v-for="section in sections"
@@ -56,23 +37,20 @@ import {
   Download,
   FileText,
   Folder,
-  FolderOpen,
   HardDrive,
   Home,
   Monitor,
   Music,
   PictureInPicture2,
-  Plus,
-  Search,
   Trash2,
   Usb,
   Video
 } from 'lucide-vue-next';
-import { computed, reactive } from 'vue';
-import { getVirtualPathLabel, isVirtualPath, normalizePath } from '../lib/virtualPaths';
+import { reactive } from 'vue';
+import { isVirtualPath, normalizePath } from '../lib/virtualPaths';
 import { showNativeFileContextMenu } from '../lib/contextMenu';
 
-const emit = defineEmits(['resize-start', 'navigate', 'go-welcome', 'quick-add']);
+const emit = defineEmits(['resize-start', 'navigate']);
 const props = defineProps({
   sections: {
     type: Array,
@@ -117,19 +95,4 @@ function onItemContextMenu(event, item) {
     paths: [item.path]
   });
 }
-
-function goHome() {
-  emit('go-welcome');
-}
-
-const currentLocationLabel = computed(() => {
-  const normalized = normalizePath(props.currentPath);
-  if (!normalized) return 'No location';
-  if (isVirtualPath(normalized)) {
-    return getVirtualPathLabel(normalized) || normalized;
-  }
-  const parts = normalized.split('/').filter(Boolean);
-  if (parts.length === 0) return '/';
-  return parts[parts.length - 1];
-});
 </script>

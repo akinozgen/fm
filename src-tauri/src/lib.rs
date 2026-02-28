@@ -74,8 +74,16 @@ async fn read_dir_cmd(
   let cancel = CancelFlag::new();
   state.insert_job(request_id, cancel.clone());
 
+  let path_trimmed = path.trim();
+  #[cfg(windows)]
+  if is_unc_path(path_trimmed) {
+    return Err("Network paths are not supported".to_string());
+  }
   let app_clone = app.clone();
   let state_clone = state.inner().clone();
+  #[cfg(windows)]
+  let path_buf = resolve_windows_unix_style_path(path_trimmed).unwrap_or_else(|| PathBuf::from(path));
+  #[cfg(not(windows))]
   let path_buf = PathBuf::from(path);
   tauri::async_runtime::spawn(async move {
     read_dir(app_clone, state_clone, request_id, path_buf, opts, cancel).await;
@@ -95,8 +103,16 @@ async fn walk_dir_cmd(
   let cancel = CancelFlag::new();
   state.insert_job(request_id, cancel.clone());
 
+  let path_trimmed = path.trim();
+  #[cfg(windows)]
+  if is_unc_path(path_trimmed) {
+    return Err("Network paths are not supported".to_string());
+  }
   let app_clone = app.clone();
   let state_clone = state.inner().clone();
+  #[cfg(windows)]
+  let path_buf = resolve_windows_unix_style_path(path_trimmed).unwrap_or_else(|| PathBuf::from(path));
+  #[cfg(not(windows))]
   let path_buf = PathBuf::from(path);
   tauri::async_runtime::spawn(async move {
     walk_dir(app_clone, state_clone, request_id, path_buf, opts, cancel).await;
@@ -110,6 +126,21 @@ fn cancel_cmd(state: State<'_, Arc<FileCoreState>>, request_id: u64) -> bool {
   state.cancel_job(request_id)
 }
 
+/// On Windows, resolve Unix-style paths that frontend may send ("/", "/Users") to real paths.
+#[cfg(windows)]
+fn resolve_windows_unix_style_path(trimmed: &str) -> Option<PathBuf> {
+  let normalized = trimmed.trim().replace('/', std::path::MAIN_SEPARATOR_STR);
+  if normalized.is_empty() || normalized == "\\" {
+    return std::env::current_dir().ok().map(|p| p.components().take(2).collect::<PathBuf>());
+  }
+  if normalized.eq_ignore_ascii_case("\\Users") || normalized.eq_ignore_ascii_case("\\Users\\") {
+    return std::env::current_dir()
+      .ok()
+      .map(|p| p.components().take(2).collect::<PathBuf>().join("Users"));
+  }
+  None
+}
+
 #[tauri::command]
 fn get_file_icon_cmd(path: String, size: Option<u16>) -> Result<String, String> {
   let trimmed = path.trim();
@@ -118,6 +149,8 @@ fn get_file_icon_cmd(path: String, size: Option<u16>) -> Result<String, String> 
   }
 
   let path_buf = PathBuf::from(trimmed);
+  #[cfg(windows)]
+  let path_buf = resolve_windows_unix_style_path(trimmed).unwrap_or(path_buf);
   #[cfg(windows)]
   if !path_buf.is_absolute() {
     return Err("icon path must be absolute".to_string());
@@ -174,8 +207,39 @@ fn open_path_cmd(path: String) -> Result<(), String> {
   opener::open(path_buf).map_err(|e| e.to_string())
 }
 
+#[cfg(windows)]
+fn is_unc_path(s: &str) -> bool {
+  let t = s.trim_start();
+  t.starts_with("\\\\") || (t.starts_with("//") && t.chars().nth(2).map_or(false, |c| c != '/'))
+}
+
+/// Open a path if it exists, otherwise pass the input to the OS (URL, command name, etc.).
+/// Used by the address bar: cmd, calc, http://google.com, or existing file paths.
+/// Windows UNC paths (\\server\share) are rejected; network shares are not supported.
+#[tauri::command]
+fn open_or_run_cmd(input: String) -> Result<(), String> {
+  let trimmed = input.trim();
+  if trimmed.is_empty() {
+    return Err("input is empty".to_string());
+  }
+  #[cfg(windows)]
+  if is_unc_path(trimmed) {
+    return Err("Network paths are not supported".to_string());
+  }
+  let path_buf = PathBuf::from(trimmed);
+  if path_buf.exists() {
+    opener::open(path_buf).map_err(|e| e.to_string())
+  } else {
+    opener::open(trimmed).map_err(|e| e.to_string())
+  }
+}
+
 #[tauri::command]
 fn is_valid_dir_cmd(path: String) -> bool {
+  #[cfg(windows)]
+  if is_unc_path(&path) {
+    return false;
+  }
   let path_buf = PathBuf::from(path);
   std::fs::metadata(path_buf)
     .map(|m| m.is_dir())
@@ -611,6 +675,7 @@ pub fn run() {
       get_sidebar_cmd,
       get_storage_paths_cmd,
       open_path_cmd,
+      open_or_run_cmd,
       is_valid_dir_cmd,
       expand_path_cmd,
       rename_path_cmd,
