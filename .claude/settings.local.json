@@ -5,7 +5,8 @@
       "Bash(wc:*)",
       "WebSearch",
       "WebFetch(domain:v2.tauri.app)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(du:*)"
     ]
   }
 }

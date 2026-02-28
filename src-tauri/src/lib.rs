@@ -74,6 +74,7 @@ async fn read_dir_cmd(
   let cancel = CancelFlag::new();
   state.insert_job(request_id, cancel.clone());
 
+  #[cfg(windows)]
   let path_trimmed = path.trim();
   #[cfg(windows)]
   if is_unc_path(path_trimmed) {
@@ -103,6 +104,7 @@ async fn walk_dir_cmd(
   let cancel = CancelFlag::new();
   state.insert_job(request_id, cancel.clone());
 
+  #[cfg(windows)]
   let path_trimmed = path.trim();
   #[cfg(windows)]
   if is_unc_path(path_trimmed) {
