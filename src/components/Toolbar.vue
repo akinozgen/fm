@@ -14,6 +14,7 @@
       @navigate-manual="(path) => $emit('navigate-path-manual', path)"
       @delete-manual-history="(path) => $emit('delete-manual-history', path)"
       @open-failed="(msg) => $emit('open-failed', msg)"
+      @open-path="(path) => $emit('open-path', path)"
     />
     <div class="view-group">
       <div v-if="transferJobs.length > 0" ref="transferWrapRef" class="transfer-btn-wrap">
@@ -89,6 +90,7 @@ const emit = defineEmits([
   'navigate-path-manual',
   'delete-manual-history',
   'open-failed',
+  'open-path',
   'cancel-transfer',
   'pause-transfer',
   'resume-transfer'

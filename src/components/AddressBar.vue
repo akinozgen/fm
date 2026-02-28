@@ -48,7 +48,7 @@
           <button
             class="path-history-go path-autocomplete-item"
             :title="item.path"
-            @mousedown.prevent="applyAutocompleteItem(item.path)"
+            @mousedown.prevent="applyAutocompleteItem(item)"
           >
             {{ item.name }}
           </button>
@@ -79,7 +79,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['navigate', 'navigate-manual', 'delete-manual-history', 'open-failed']);
+const emit = defineEmits(['navigate', 'navigate-manual', 'delete-manual-history', 'open-failed', 'open-path']);
 
 const isEditing = ref(false);
 const editValue = ref('');
@@ -201,7 +201,7 @@ const dropdownItems = computed(() => {
     return filteredHistory.value.map((p) => ({ type: 'history', path: p }));
   }
   if (folderSuggestions.value.length > 0) {
-    return folderSuggestions.value.map((e) => ({ type: 'folder', path: e.path, name: e.name }));
+    return folderSuggestions.value.map((e) => ({ type: 'folder', path: e.path, name: e.name, is_dir: e.is_dir }));
   }
   return filteredHistory.value.map((p) => ({ type: 'history', path: p }));
 });
@@ -280,8 +280,12 @@ function applyHistoryPath(path) {
   cancelEditing();
 }
 
-function applyAutocompleteItem(path) {
-  emit('navigate-manual', path);
+function applyAutocompleteItem(item) {
+  if (item.is_dir) {
+    emit('navigate-manual', item.path);
+  } else {
+    emit('open-path', item.path);
+  }
   cancelEditing();
 }
 
@@ -306,7 +310,7 @@ function onInputKeydown(e) {
         if (item.type === 'history') {
           applyHistoryPath(item.path);
         } else {
-          applyAutocompleteItem(item.path);
+          applyAutocompleteItem(item);
         }
         return;
       }

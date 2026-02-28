@@ -62,6 +62,7 @@
         @navigate-path-manual="navigateToFromManual"
         @delete-manual-history="deleteManualHistoryPath"
         @open-failed="onAddressBarOpenFailed"
+        @open-path="openFile"
         @cancel-transfer="onCancelTransfer"
         @pause-transfer="onPauseTransfer"
         @resume-transfer="onResumeTransfer"
