@@ -206,6 +206,9 @@ pub fn build_sidebar() -> Vec<SidebarSection> {
     drives.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
   }
 
+  #[cfg(windows)]
+  drives.sort_by(|a, b| a.path.cmp(&b.path));
+
   sections.push(SidebarSection {
     title: "Drives".to_string(),
     items: drives,

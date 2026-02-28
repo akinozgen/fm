@@ -21,7 +21,7 @@
             @contextmenu.prevent="onItemContextMenu($event, item)"
           >
             <component :is="resolveIcon(item)" :size="14" />
-            <span>{{ item.label }}</span>
+            <span>{{ driveDisplayText(item) }}</span>
           </button>
         </div>
       </div>
@@ -66,6 +66,13 @@ const collapsed = reactive({});
 
 function toggleSection(title) {
   collapsed[title] = !collapsed[title];
+}
+
+function driveDisplayText(item) {
+  if (item.kind === 'device' || item.kind === 'device_removable') {
+    return `${item.path} ${item.label}`.trim();
+  }
+  return item.label;
 }
 
 function resolveIcon(item) {
