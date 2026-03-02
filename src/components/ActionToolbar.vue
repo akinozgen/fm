@@ -28,111 +28,41 @@
         <Trash2 :size="14" />
       </button>
     </div>
-    <div class="action-dropdown-wrap">
-      <button class="op-btn op-btn-dropdown" @click.stop="toggleMenu">
-        <SlidersHorizontal :size="13" />
-        View Options
-        <ChevronDown :size="12" />
-      </button>
-      <div v-if="menuOpen" class="op-dropdown" @click.stop>
-        <div class="op-sort-section" style="padding-bottom: 2px">
-          <span class="op-sort-label">Display</span>
-        </div>
-        <label class="op-check">
-          <input
-            class="op-check-input"
-            type="checkbox"
-            :checked="showHidden"
-            @change="$emit('update:show-hidden', $event.target.checked)"
-          />
-          <span class="op-check-mark" aria-hidden="true"></span>
-          <span class="op-check-label">Show Hidden Files</span>
-        </label>
-        <label class="op-check">
-          <input
-            class="op-check-input"
-            type="checkbox"
-            :checked="showExtensions"
-            @change="$emit('update:show-extensions', $event.target.checked)"
-          />
-          <span class="op-check-mark" aria-hidden="true"></span>
-          <span class="op-check-label">Show File Extensions</span>
-        </label>
-        <label class="op-check">
-          <input
-            class="op-check-input"
-            type="checkbox"
-            :checked="showSelectionCheckboxes"
-            @change="$emit('update:show-selection-checkboxes', $event.target.checked)"
-          />
-          <span class="op-check-mark" aria-hidden="true"></span>
-          <span class="op-check-label">Show Selection Checkboxes</span>
-        </label>
-
-        <div class="op-divider"></div>
-
-        <div class="op-sort-section">
-          <span class="op-sort-label">Sort by</span>
-          <div class="op-sort-group">
-            <button
-              v-for="field in SORT_FIELDS"
-              :key="field.value"
-              class="op-sort-btn"
-              :class="{ active: sortBy === field.value }"
-              @click="$emit('update:sort-by', field.value)"
-            >{{ field.label }}</button>
-          </div>
-          <div class="op-sort-dir">
-            <button
-              class="op-sort-dir-btn"
-              :class="{ active: sortDir === 'asc' }"
-              @click="$emit('update:sort-dir', 'asc')"
-            >
-              <ArrowUpNarrowWide :size="12" />
-              Ascending
-            </button>
-            <button
-              class="op-sort-dir-btn"
-              :class="{ active: sortDir === 'desc' }"
-              @click="$emit('update:sort-dir', 'desc')"
-            >
-              <ArrowDownWideNarrow :size="12" />
-              Descending
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <ViewOptionsDropdown
+      :view-mode="viewMode"
+      :show-hidden="showHidden"
+      :show-extensions="showExtensions"
+      :show-selection-checkboxes="showSelectionCheckboxes"
+      :sort-by="sortBy"
+      :sort-dir="sortDir"
+      @update:view-mode="$emit('update:view-mode', $event)"
+      @update:show-hidden="$emit('update:show-hidden', $event)"
+      @update:show-extensions="$emit('update:show-extensions', $event)"
+      @update:show-selection-checkboxes="$emit('update:show-selection-checkboxes', $event)"
+      @update:sort-by="$emit('update:sort-by', $event)"
+      @update:sort-dir="$emit('update:sort-dir', $event)"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed } from 'vue';
 import {
-  ArrowDownWideNarrow,
-  ArrowUpNarrowWide,
   CheckSquare,
-  ChevronDown,
   ClipboardPaste,
   Copy,
   Scissors,
   Shuffle,
-  SlidersHorizontal,
   Square,
   Trash2
 } from 'lucide-vue-next';
-
-const SORT_FIELDS = [
-  { value: 'name',     label: 'Name' },
-  { value: 'type',     label: 'Type' },
-  { value: 'size',     label: 'Size' },
-  { value: 'modified', label: 'Date' },
-];
+import ViewOptionsDropdown from '@/components/ViewOptionsDropdown.vue';
 
 const props = defineProps({
   showHidden: { type: Boolean, required: true },
   showExtensions: { type: Boolean, required: true },
   showSelectionCheckboxes: { type: Boolean, required: true },
+  viewMode: { type: String, required: true },
   selectedCount: { type: Number, default: 0 },
   sortBy: { type: String, default: 'name' },
   sortDir: { type: String, default: 'asc' },
@@ -142,11 +72,11 @@ const props = defineProps({
 
 const hasSelection = computed(() => props.selectedCount > 0);
 
-const menuOpen = ref(false);
 defineEmits([
   'update:show-hidden',
   'update:show-extensions',
   'update:show-selection-checkboxes',
+  'update:view-mode',
   'update:sort-by',
   'update:sort-dir',
   'select-all',
@@ -157,19 +87,4 @@ defineEmits([
   'paste'
 ]);
 
-function toggleMenu() {
-  menuOpen.value = !menuOpen.value;
-}
-
-function onWindowClick() {
-  menuOpen.value = false;
-}
-
-onMounted(() => {
-  window.addEventListener('click', onWindowClick);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener('click', onWindowClick);
-});
 </script>

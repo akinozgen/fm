@@ -16,73 +16,56 @@
       @open-failed="(msg) => $emit('open-failed', msg)"
       @open-path="(path) => $emit('open-path', path)"
     />
-    <div class="view-group">
-      <div v-if="transferJobs.length > 0" ref="transferWrapRef" class="transfer-btn-wrap">
-        <button
-          class="pill-btn transfer-progress-btn"
-          title="Transfer in progress"
-          aria-label="Transfer in progress"
-          @click.stop="transferPopoutOpen = !transferPopoutOpen"
-        >
-          <svg class="transfer-progress-ring" viewBox="0 0 24 24" aria-hidden="true">
-            <circle class="transfer-progress-bg" cx="12" cy="12" r="10" fill="none" stroke-width="2" />
-            <circle
-              class="transfer-progress-fill"
-              cx="12"
-              cy="12"
-              r="10"
-              fill="none"
-              stroke-width="2"
-              :stroke-dasharray="circumference"
-              :stroke-dashoffset="strokeOffset"
-            />
-          </svg>
-          <Copy v-if="!firstJob || firstJob.op !== 'move'" :size="12" class="transfer-progress-icon" />
-          <Scissors v-else :size="12" class="transfer-progress-icon" />
-        </button>
-        <div v-if="transferPopoutOpen" class="transfer-popout" @click.stop>
-          <div class="transfer-popout-list">
-            <TransferBar
-              v-for="job in transferJobs"
-              :key="job.id"
-              :active="true"
-              :paused="job.paused"
-              :progress="job"
-              @cancel="$emit('cancel-transfer', job.id)"
-              @pause="$emit('pause-transfer', job.id)"
-              @resume="$emit('resume-transfer', job.id)"
-            />
-          </div>
+    <div v-if="transferJobs.length > 0" ref="transferWrapRef" class="transfer-btn-wrap view-group">
+      <button
+        class="pill-btn transfer-progress-btn"
+        title="Transfer in progress"
+        aria-label="Transfer in progress"
+        @click.stop="transferPopoutOpen = !transferPopoutOpen"
+      >
+        <svg class="transfer-progress-ring" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="transfer-progress-bg" cx="12" cy="12" r="10" fill="none" stroke-width="2" />
+          <circle
+            class="transfer-progress-fill"
+            cx="12"
+            cy="12"
+            r="10"
+            fill="none"
+            stroke-width="2"
+            :stroke-dasharray="circumference"
+            :stroke-dashoffset="strokeOffset"
+          />
+        </svg>
+        <Copy v-if="!firstJob || firstJob.op !== 'move'" :size="12" class="transfer-progress-icon" />
+        <Scissors v-else :size="12" class="transfer-progress-icon" />
+      </button>
+      <div v-if="transferPopoutOpen" class="transfer-popout" @click.stop>
+        <div class="transfer-popout-list">
+          <TransferBar
+            v-for="job in transferJobs"
+            :key="job.id"
+            :active="true"
+            :paused="job.paused"
+            :progress="job"
+            @cancel="$emit('cancel-transfer', job.id)"
+            @pause="$emit('pause-transfer', job.id)"
+            @resume="$emit('resume-transfer', job.id)"
+          />
         </div>
       </div>
-      <button
-        class="pill-btn"
-        :class="{ active: viewMode === 'grid' }"
-        @click="$emit('update:view-mode', 'grid')"
-      >
-        <LayoutGrid :size="14" />
-      </button>
-      <button
-        class="pill-btn"
-        :class="{ active: viewMode === 'list' }"
-        @click="$emit('update:view-mode', 'list')"
-      >
-        <List :size="14" />
-      </button>
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ArrowUp, ChevronLeft, ChevronRight, Copy, LayoutGrid, List, Scissors } from 'lucide-vue-next';
+import { ArrowUp, ChevronLeft, ChevronRight, Copy, Scissors } from 'lucide-vue-next';
 import AddressBar from './AddressBar.vue';
 import TransferBar from './TransferBar.vue';
 
 const CIRCUMFERENCE = 2 * Math.PI * 10;
 
 const emit = defineEmits([
-  'update:view-mode',
   'navigate-up',
   'navigate-back',
   'navigate-forward',
@@ -106,10 +89,6 @@ const props = defineProps({
   },
   manualHistory: {
     type: Array,
-    required: true
-  },
-  viewMode: {
-    type: String,
     required: true
   },
   transferJobs: {

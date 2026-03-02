@@ -78,16 +78,18 @@ fn build_files_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
 
 fn build_dir_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
   Menu::with_items(app, &[
-    &item(app, "open",          "Open")?,
+    &item(app, "open",             "Open")?,
     &sep(app)?,
-    &item(app, "rename",        "Rename")?,
-    &item(app, "copy",          "Copy")?,
-    &item(app, "cut",           "Cut")?,
+    &item(app, "pin_to_favorites", "Pin to Favorites")?,
     &sep(app)?,
-    &item(app, "delete",        "Delete")?,
+    &item(app, "rename",           "Rename")?,
+    &item(app, "copy",             "Copy")?,
+    &item(app, "cut",              "Cut")?,
     &sep(app)?,
-    &item(app, "open_terminal", "Open in Terminal")?,
-    &item(app, "properties",    "Properties")?,
+    &item(app, "delete",           "Delete")?,
+    &sep(app)?,
+    &item(app, "open_terminal",    "Open in Terminal")?,
+    &item(app, "properties",       "Properties")?,
   ]).map_err(|e| e.to_string())
 }
 
@@ -112,10 +114,17 @@ fn build_mixed_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
   ]).map_err(|e| e.to_string())
 }
 
-// Sidebar folder items — navigate + info only
-fn build_sidebar_item_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
+// Sidebar folder items — navigate, pin/unpin, info
+fn build_sidebar_item_menu(app: &AppHandle, is_pinned: bool) -> Result<Menu<tauri::Wry>, String> {
+  let pin_item = if is_pinned {
+    &item(app, "unpin_from_favorites", "Unpin from Favorites")?
+  } else {
+    &item(app, "pin_to_favorites", "Pin to Favorites")?
+  };
   Menu::with_items(app, &[
-    &item(app, "open",       "Open")?,
+    &item(app, "open", "Open")?,
+    &sep(app)?,
+    pin_item,
     &sep(app)?,
     &item(app, "properties", "Properties")?,
   ]).map_err(|e| e.to_string())
@@ -131,6 +140,7 @@ pub fn show_file_context_menu_cmd(
   y: f64,
   kind: String,
   paths: Vec<String>,
+  is_pinned: Option<bool>,
 ) -> Result<(), String> {
   *state.paths.lock().unwrap() = paths;
   *state.kind.lock().unwrap() = kind.clone();
@@ -142,7 +152,7 @@ pub fn show_file_context_menu_cmd(
     "dir"   => build_dir_menu(&app)?,
     "dirs"  => build_dirs_menu(&app)?,
     "mixed"        => build_mixed_menu(&app)?,
-    "sidebar_item" => build_sidebar_item_menu(&app)?,
+    "sidebar_item" => build_sidebar_item_menu(&app, is_pinned.unwrap_or(false))?,
     _              => return Err(format!("unsupported context kind: {kind}")),
   };
 

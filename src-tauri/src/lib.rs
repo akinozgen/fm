@@ -11,6 +11,7 @@ mod core;
 mod context_menu;
 mod dir_size;
 mod icons;
+mod pinned_favorites;
 mod sidebar;
 mod storage;
 mod thumbnails;
@@ -191,8 +192,28 @@ fn cancel_thumbnails_cmd(thumb_state: State<'_, ThumbnailState>) {
 }
 
 #[tauri::command]
-fn get_sidebar_cmd() -> Vec<sidebar::SidebarSection> {
-  build_sidebar()
+fn get_pinned_favorites_cmd(state: State<'_, StorageState>) -> Vec<String> {
+  pinned_favorites::get_pinned_favorites(&state.paths.config_dir)
+}
+
+#[tauri::command]
+fn add_pinned_favorite_cmd(state: State<'_, StorageState>, path: String) -> Result<(), String> {
+  pinned_favorites::add_pinned_favorite(&state.paths.config_dir, path)
+}
+
+#[tauri::command]
+fn remove_pinned_favorite_cmd(state: State<'_, StorageState>, path: String) -> Result<(), String> {
+  pinned_favorites::remove_pinned_favorite(&state.paths.config_dir, path)
+}
+
+#[tauri::command]
+fn set_pinned_favorites_cmd(state: State<'_, StorageState>, paths: Vec<String>) -> Result<(), String> {
+  pinned_favorites::set_pinned_favorites(&state.paths.config_dir, paths)
+}
+
+#[tauri::command]
+fn get_sidebar_cmd(pinned_paths: Option<Vec<String>>) -> Vec<sidebar::SidebarSection> {
+  build_sidebar(pinned_paths.as_deref())
 }
 
 #[tauri::command]
@@ -674,6 +695,10 @@ pub fn run() {
       get_file_icon_cmd,
       get_thumbnails_batch_cmd,
       cancel_thumbnails_cmd,
+      get_pinned_favorites_cmd,
+      add_pinned_favorite_cmd,
+      remove_pinned_favorite_cmd,
+      set_pinned_favorites_cmd,
       get_sidebar_cmd,
       get_storage_paths_cmd,
       open_path_cmd,
@@ -722,12 +747,13 @@ pub fn run() {
       Ok(())
     })
     .on_menu_event(|app, event| {
-      if event.id() == "address.copy" {
+      let id = event.id().0.as_str();
+      if id == "address.copy" {
         let _ = app.emit("fm://address-menu", "copy");
-      } else if event.id() == "address.clear" {
+      } else if id == "address.clear" {
         let _ = app.emit("fm://address-menu", "clear");
-      } else if event.id().as_ref().starts_with("context.") {
-        context_menu::handle_menu_event(app, event.id().as_ref());
+      } else if id.starts_with("context.") {
+        context_menu::handle_menu_event(app, id);
       }
     })
     .run(tauri::generate_context!())

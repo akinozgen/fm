@@ -10,6 +10,7 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "FM",
@@ -20,7 +21,14 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
-        "shadow": true
+        "shadow": true,
+        "transparent": true,
+        "windowEffects": {
+          "effects": ["mica", "acrylic", "hudWindow"],
+          "state": "followsWindowActiveState",
+          "radius": null,
+          "color": null
+        }
       }
     ],
     "security": {

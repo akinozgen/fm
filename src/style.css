@@ -13,10 +13,14 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  background: transparent;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   margin: 0;
-  background: var(--bg);
   color: var(--ink);
   height: 100vh;
   overflow: hidden;
@@ -53,6 +57,7 @@ body * {
   grid-template-rows: auto 1fr;
   height: 100%;
   overflow: hidden;
+  background: transparent;
 }
 
 .app-titlebar {
@@ -114,13 +119,51 @@ body * {
   min-width: 0;
 }
 
+.titlebar-path-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 200px;
+  max-width: 40%;
+  padding: 0 8px 0 10px;
+  background: var(--panel-muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.titlebar-path-wrap .titlebar-path {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
 .titlebar-path {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
+}
+
+.titlebar-path-search {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.titlebar-path-search:hover {
+  background: var(--panel);
+  color: var(--ink);
 }
 
 .titlebar-right {
@@ -208,6 +251,15 @@ body * {
   padding-right: 10px;
 }
 
+/* macOS: native traffic lights sol üstte; kendi kontrollerimizi gizle, fm butonunu sağa kaydır */
+.app-shell[data-platform="macos"] .titlebar-win-controls {
+  display: none;
+}
+
+.app-shell[data-platform="macos"] .titlebar-left {
+  padding-left: 72px;
+}
+
 .app-shell .sidebar {
   grid-row: 2;
 }
@@ -217,7 +269,9 @@ body * {
 }
 
 .sidebar {
-  background: var(--panel);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   border-right: 1px solid var(--line);
   padding: 12px 10px;
   position: relative;
@@ -339,7 +393,7 @@ body * {
   border-radius: 6px;
   cursor: pointer;
   display: grid;
-  grid-template-columns: 16px 1fr;
+  grid-template-columns: 16px 1fr auto;
   align-items: center;
   gap: 8px;
   background: transparent;
@@ -349,6 +403,52 @@ body * {
 
 .tree-item:hover {
   background: var(--panel-muted);
+}
+
+.tree-item-unpin {
+  opacity: 0;
+  padding: 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tree-item:hover .tree-item-unpin {
+  opacity: 1;
+}
+
+.tree-item-unpin:hover {
+  background: var(--line);
+}
+
+.tree-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-item[draggable="true"] {
+  cursor: grab;
+}
+
+.tree-item[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.tree-item.tree-item-dragging {
+  opacity: 0.5;
+}
+
+.tree-item.tree-item-drop-target {
+  background: var(--panel-muted);
+  outline: 1px dashed var(--line);
+  outline-offset: -1px;
 }
 
 .tree-section:hover {
@@ -375,6 +475,11 @@ body * {
   min-width: 0;
   min-height: 0;
   background: var(--panel);
+}
+
+/* Sidebar alanı tamamen şeffaf; sadece .main ve titlebar opak */
+.app-shell > .main {
+  background: var(--bg);
 }
 
 .main > .toolbar {
@@ -644,6 +749,13 @@ body * {
   background: var(--panel);
 }
 
+.op-btn-dropdown.op-btn-dropdown-icon {
+  min-width: 36px;
+  width: 36px;
+  padding: 0;
+  gap: 2px;
+}
+
 .op-dropdown {
   position: absolute;
   top: 28px;
@@ -657,6 +769,40 @@ body * {
   display: grid;
   gap: 2px;
   z-index: 10;
+}
+
+.op-view-toggle-wrap {
+  display: flex;
+  gap: 2px;
+  padding: 2px 2px 4px;
+}
+
+.op-view-toggle-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 7px;
+  background: #ededf3;
+  color: #5e6070;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.op-view-toggle-btn:hover {
+  background: #e2e4ec;
+  color: #2a2b31;
+}
+
+.op-view-toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
 }
 
 .op-check {
@@ -1040,96 +1186,99 @@ body * {
   min-height: 0;
   align-self: stretch;
   overflow: auto;
-  padding: 22px 22px 30px;
+  padding: 14px 18px 20px;
   background:
-    radial-gradient(900px 340px at 8% -10%, #e7f0ff 0, rgba(231, 240, 255, 0) 55%),
-    radial-gradient(800px 300px at 95% 0%, #f2ece2 0, rgba(242, 236, 226, 0) 50%),
+    radial-gradient(700px 260px at 6% -8%, #e7f0ff 0, rgba(231, 240, 255, 0) 55%),
+    radial-gradient(600px 220px at 96% 2%, #f2ece2 0, rgba(242, 236, 226, 0) 50%),
     #f7f7f9;
 }
 
 .welcome-hero {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .welcome-title {
   margin: 0;
-  font-size: 24px;
-  line-height: 1.1;
+  font-size: 18px;
+  line-height: 1.2;
   letter-spacing: -0.02em;
   font-weight: 700;
   font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--ink);
 }
 
 .welcome-subtitle {
-  margin: 7px 0 0;
-  font-size: 13px;
+  margin: 2px 0 0;
+  font-size: 12px;
   color: var(--muted);
 }
 
 .welcome-section {
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .welcome-section-head {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 5px;
+  font-size: 11px;
   font-weight: 600;
-  color: #464954;
-  padding: 4px 8px;
-  border: 1px solid #d8dae3;
-  border-radius: 99px;
-  background: #ffffffd9;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 0;
 }
 
 .welcome-grid {
-  margin-top: 10px;
+  margin-top: 6px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 6px;
 }
 
 .welcome-card {
-  min-height: 82px;
-  border: 1px solid #d6d9e3;
-  background: linear-gradient(180deg, #ffffff, #f5f7fb);
-  border-radius: 10px;
-  padding: 10px 11px;
+  min-height: 52px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 6px 8px;
   display: grid;
-  gap: 6px;
-  align-content: start;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
   justify-items: start;
-  color: #2a2d35;
+  color: var(--ink);
   text-align: left;
-  box-shadow: 0 2px 0 rgba(255, 255, 255, 0.9) inset;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
 }
 
 .welcome-card:hover {
   border-color: #bfc7d8;
-  background: linear-gradient(180deg, #ffffff, #eef3ff);
+  background: var(--panel-muted);
 }
 
 .welcome-card.removable {
-  background: linear-gradient(180deg, #ffffff, #f3efe8);
+  background: rgba(255, 251, 245, 0.9);
+}
+
+.welcome-card.removable:hover {
+  background: rgba(255, 245, 230, 0.95);
+}
+
+.welcome-card-icon {
+  flex-shrink: 0;
+  color: var(--muted);
 }
 
 .welcome-card-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.welcome-card-path {
-  font-size: 11px;
-  color: #6f7482;
-  max-width: 100%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .grid {

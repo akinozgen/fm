@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use directories::UserDirs;
@@ -89,7 +89,17 @@ fn human_drive_label(mount: &str, device_name: &str, total_space: u64, home_moun
   format!("{base} ({})", format_drive_size(total_space))
 }
 
-pub fn build_sidebar() -> Vec<SidebarSection> {
+fn path_last_segment(path: &str) -> String {
+  let normalized = path.replace('\\', "/").trim_end_matches('/').to_string();
+  normalized
+    .rsplit('/')
+    .next()
+    .filter(|s| !s.is_empty())
+    .unwrap_or(&normalized)
+    .to_string()
+}
+
+pub fn build_sidebar(pinned_paths: Option<&[String]>) -> Vec<SidebarSection> {
   let mut sections: Vec<SidebarSection> = Vec::new();
   let username = whoami::username();
 
@@ -115,6 +125,25 @@ pub fn build_sidebar() -> Vec<SidebarSection> {
     add_dir_if_exists(&mut favorites, "Pictures", home.join("Pictures"));
     add_dir_if_exists(&mut favorites, "Music", home.join("Music"));
     add_dir_if_exists(&mut favorites, "Videos", home.join("Videos"));
+
+    if let Some(pinned) = pinned_paths {
+      let existing: HashSet<String> = favorites
+        .iter()
+        .map(|i| i.path.replace('\\', "/").trim_end_matches('/').to_string())
+        .collect();
+      for path in pinned.iter() {
+        let normalized = path.replace('\\', "/").trim_end_matches('/').to_string();
+        if normalized.is_empty() || existing.contains(&normalized) {
+          continue;
+        }
+        let label = path_last_segment(path);
+        favorites.push(SidebarItem {
+          label,
+          path: path.to_string(),
+          kind: "pinned".to_string(),
+        });
+      }
+    }
 
     favorites.push(SidebarItem {
       label: "Trash".to_string(),

@@ -35,21 +35,53 @@
         <span>Empty Trash</span>
       </button>
     </div>
+
+    <ViewOptionsDropdown
+      :view-mode="viewMode"
+      :show-hidden="showHidden"
+      :show-extensions="showExtensions"
+      :show-selection-checkboxes="showSelectionCheckboxes"
+      :sort-by="sortBy"
+      :sort-dir="sortDir"
+      @update:view-mode="$emit('update:view-mode', $event)"
+      @update:show-hidden="$emit('update:show-hidden', $event)"
+      @update:show-extensions="$emit('update:show-extensions', $event)"
+      @update:show-selection-checkboxes="$emit('update:show-selection-checkboxes', $event)"
+      @update:sort-by="$emit('update:sort-by', $event)"
+      @update:sort-dir="$emit('update:sort-dir', $event)"
+    />
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue';
 import { CheckSquare, Shuffle, Square, Trash2 } from 'lucide-vue-next';
+import ViewOptionsDropdown from '@/components/ViewOptionsDropdown.vue';
 
 const props = defineProps({
   selectedCount: { type: Number, default: 0 },
   canEmptyTrash: { type: Boolean, required: true },
   onDelete: { type: Function, required: true },
-  onEmptyTrash: { type: Function, required: true }
+  onEmptyTrash: { type: Function, required: true },
+  viewMode: { type: String, default: 'list' },
+  showHidden: { type: Boolean, default: false },
+  showExtensions: { type: Boolean, default: true },
+  showSelectionCheckboxes: { type: Boolean, default: false },
+  sortBy: { type: String, default: 'name' },
+  sortDir: { type: String, default: 'asc' },
 });
 
-defineEmits(['select-all', 'deselect-all', 'select-inverse']);
+defineEmits([
+  'select-all',
+  'deselect-all',
+  'select-inverse',
+  'update:view-mode',
+  'update:show-hidden',
+  'update:show-extensions',
+  'update:show-selection-checkboxes',
+  'update:sort-by',
+  'update:sort-dir',
+]);
 
 const hasSelection = computed(() => props.selectedCount > 0);
 </script>

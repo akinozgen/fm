@@ -1,5 +1,5 @@
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :data-platform="platformData">
     <header class="app-titlebar" data-tauri-drag-region @mousedown="onTitlebarMousedown">
       <div class="titlebar-left">
         <button type="button" class="titlebar-brand" title="Home" @click="openWelcome">
@@ -8,12 +8,14 @@
         </button>
       </div>
       <div class="titlebar-center">
-        <span class="titlebar-path" :title="currentPath">{{ titleBarLocationLabel }}</span>
+        <div class="titlebar-path-wrap">
+          <span class="titlebar-path" :title="currentPath">{{ titleBarLocationLabel }}</span>
+          <button type="button" class="titlebar-path-search" title="Search path (F6)" @click="focusAddressBar">
+            <Search :size="14" />
+          </button>
+        </div>
       </div>
       <div class="titlebar-right">
-        <button type="button" class="titlebar-btn" title="Search path (F6)" @click="focusAddressBar">
-          <Search :size="14" />
-        </button>
         <div ref="newItemWrapRef" class="titlebar-new-wrap">
           <button
             type="button"
@@ -45,6 +47,8 @@
       :current-path="currentPath"
       @resize-start="startResize"
       @navigate="navigateTo"
+      @unpin="onUnpinFavorite"
+      @reorder-pinned="onReorderPinned"
     />
     <main class="main">
       <Toolbar
@@ -52,9 +56,7 @@
         :current-path="currentPath"
         :folder-entries="entries"
         :manual-history="manualPathHistory"
-        :view-mode="viewMode"
         :transfer-jobs="transferJobs"
-        @update:view-mode="onViewModeChange"
         @navigate-up="navigateUp"
         @navigate-back="navigateBack"
         @navigate-forward="navigateForward"
@@ -71,17 +73,30 @@
         v-if="!showWelcome && isTrashView"
         :selected-count="selectedEntries.length"
         :can-empty-trash="canEmptyTrash"
+        :show-hidden="showHidden"
+        :show-extensions="showExtensions"
+        :show-selection-checkboxes="showSelectionCheckboxes"
+        :view-mode="viewMode"
+        :sort-by="sortBy"
+        :sort-dir="sortDir"
         :on-delete="deleteSelected"
         :on-empty-trash="emptyTrash"
         @select-all="selectAll"
         @deselect-all="deselectAll"
         @select-inverse="selectInverse"
+        @update:show-hidden="setShowHidden"
+        @update:show-extensions="setShowExtensions"
+        @update:show-selection-checkboxes="setShowSelectionCheckboxes"
+        @update:view-mode="onViewModeChange"
+        @update:sort-by="setSortBy"
+        @update:sort-dir="setSortDir"
       />
       <ActionToolbar
         v-else-if="!showWelcome"
         :show-hidden="showHidden"
         :show-extensions="showExtensions"
         :show-selection-checkboxes="showSelectionCheckboxes"
+        :view-mode="viewMode"
         :selected-count="selectedEntries.length"
         :sort-by="sortBy"
         :sort-dir="sortDir"
@@ -90,6 +105,7 @@
         @update:show-hidden="setShowHidden"
         @update:show-extensions="setShowExtensions"
         @update:show-selection-checkboxes="setShowSelectionCheckboxes"
+        @update:view-mode="onViewModeChange"
         @update:sort-by="setSortBy"
         @update:sort-dir="setSortDir"
         @select-all="selectAll"
@@ -180,6 +196,8 @@ import Sidebar from './components/Sidebar.vue';
 import Toolbar from './components/Toolbar.vue';
 import WelcomePage from './components/WelcomePage.vue';
 import WinControls from './components/WinControls.vue';
+
+const platformData = typeof navigator !== 'undefined' && /Mac|Darwin/.test(navigator.platform || navigator.userAgent || '') ? 'macos' : '';
 
 const viewMode = ref('list');
 const sortBy  = ref('name'); // 'name' | 'type' | 'size' | 'modified'
@@ -403,6 +421,24 @@ async function navigateToFromManual(path) {
 async function deleteManualHistoryPath(path) {
   await removeManualPath(path);
   manualPathHistory.value = await loadManualPathHistory();
+}
+
+async function onUnpinFavorite(path) {
+  try {
+    await invoke('remove_pinned_favorite_cmd', { path });
+    await loadSidebar();
+  } catch {
+    // ignore
+  }
+}
+
+async function onReorderPinned(newOrder) {
+  try {
+    await invoke('set_pinned_favorites_cmd', { paths: newOrder });
+    await loadSidebar();
+  } catch {
+    // ignore
+  }
 }
 
 async function openWelcome(options = {}) {
@@ -718,7 +754,8 @@ async function createFolder(dirPath, dirName) {
 
 async function loadSidebar() {
   try {
-    const sections = await invoke('get_sidebar_cmd');
+    const pinnedPaths = await invoke('get_pinned_favorites_cmd');
+    const sections = await invoke('get_sidebar_cmd', { pinnedPaths });
     sidebarSections.value = sections;
   } catch {
     sidebarSections.value = [];
@@ -891,6 +928,14 @@ async function hookEvents() {
         return { path: p, name, is_dir: isDir, ext: null, size: null, modified_ms: null };
       }).filter(Boolean);
       propertiesEntries.value = found;
+    } else if (action === 'pin_to_favorites' && singlePath) {
+      void invoke('add_pinned_favorite_cmd', { path: singlePath })
+        .then(() => loadSidebar())
+        .catch((err) => console.error('add_pinned_favorite_cmd failed', err));
+    } else if (action === 'unpin_from_favorites' && singlePath) {
+      void invoke('remove_pinned_favorite_cmd', { path: singlePath })
+        .then(() => loadSidebar())
+        .catch((err) => console.error('remove_pinned_favorite_cmd failed', err));
     }
   });
 
@@ -1034,7 +1079,7 @@ onMounted(async () => {
   window.addEventListener('wheel', onGridZoomWheel, { passive: false });
   window.addEventListener('keydown', blockBrowserShortcuts, { capture: true });
   window.addEventListener('keydown', onAppKeyDown);
-  window.addEventListener('click', onNewItemWindowClick);
+  window.addEventListener('click', onNewItemWindowClick, true);
   window.addEventListener('mousemove', onTitlebarMousemove);
   window.addEventListener('mouseup', onTitlebarMouseup);
   try {
@@ -1062,7 +1107,7 @@ onBeforeUnmount(async () => {
   window.removeEventListener('wheel', onGridZoomWheel);
   window.removeEventListener('keydown', blockBrowserShortcuts, { capture: true });
   window.removeEventListener('keydown', onAppKeyDown);
-  window.removeEventListener('click', onNewItemWindowClick);
+  window.removeEventListener('click', onNewItemWindowClick, true);
   window.removeEventListener('mousemove', onTitlebarMousemove);
   window.removeEventListener('mouseup', onTitlebarMouseup);
   if (gridZoomSaveTimer) clearTimeout(gridZoomSaveTimer);
