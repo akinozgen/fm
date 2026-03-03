@@ -45,6 +45,12 @@ impl ThumbnailState {
 /// `size` is the logical CSS pixel size (e.g. 48); rendered at 2× for HiDPI.
 /// Returns a base64-encoded JPEG string.
 pub fn get_thumbnail(path: &str, size: u32, thumb_dir: &Path) -> Result<String, String> {
+  // Never generate thumbnails for files that are already inside our thumbnail
+  // cache directory; otherwise we recursively create thumbnails of thumbnails.
+  if Path::new(path).starts_with(thumb_dir) {
+    return Err("skip thumbnail cache path".to_string());
+  }
+
   let mtime = mtime_secs(path);
   let filename = cache_filename(path, mtime, size);
   let cache_path = thumb_dir.join(&filename);
