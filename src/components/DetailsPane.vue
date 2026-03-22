@@ -109,13 +109,13 @@ onUnmounted(stopSizeCompute);
 // ── Derived display values ────────────────────────────────────────────────────
 const isSingle = computed(() => props.entries.length === 1);
 
-const allDirs  = computed(() => props.entries.every((e) => e.is_dir));
-const allFiles = computed(() => props.entries.every((e) => !e.is_dir));
+const allDirs  = computed(() => props.entries.every((e) => e.is_dir && !e.is_app_bundle));
+const allFiles = computed(() => props.entries.every((e) => !e.is_dir || e.is_app_bundle));
 
 const multiLabel = computed(() => {
   if (allDirs.value) return `${props.entries.length} Folders`;
   if (allFiles.value) return `${props.entries.length} Files`;
-  const dirs  = props.entries.filter((e) => e.is_dir).length;
+  const dirs  = props.entries.filter((e) => e.is_dir && !e.is_app_bundle).length;
   const files = props.entries.length - dirs;
   return `${files} file${files !== 1 ? 's' : ''}, ${dirs} folder${dirs !== 1 ? 's' : ''}`;
 });
@@ -123,6 +123,7 @@ const multiLabel = computed(() => {
 const typeLabel = computed(() => {
   if (isSingle.value) {
     const e = props.entries[0];
+    if (e.is_app_bundle) return 'Application';
     return e.is_dir ? 'Folder' : (e.ext ? e.ext.toUpperCase() + ' File' : 'File');
   }
   if (allDirs.value) return 'Folders';

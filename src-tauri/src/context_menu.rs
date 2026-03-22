@@ -1,7 +1,22 @@
+use std::io::Read;
+use std::path::Path;
 use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position};
+
+/// Read the first 512 bytes of a file and decide if it looks like editable text.
+/// Logic: no null bytes AND valid UTF-8 → text. Same heuristic git uses.
+fn is_likely_text(path: &Path) -> bool {
+  let Ok(mut f) = std::fs::File::open(path) else { return false };
+  let mut buf = [0u8; 512];
+  let n = f.read(&mut buf).unwrap_or(0);
+  if n == 0 {
+    return true; // empty file is fine to open as text
+  }
+  let sample = &buf[..n];
+  !sample.contains(&0u8) && std::str::from_utf8(sample).is_ok()
+}
 
 // ── Emitted event payload ─────────────────────────────────────────────────────
 #[derive(Debug, Clone, serde::Serialize)]
@@ -50,9 +65,10 @@ fn build_empty_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
   ]).map_err(|e| e.to_string())
 }
 
-fn build_file_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
+fn build_app_bundle_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
   Menu::with_items(app, &[
     &item(app, "open",       "Open")?,
+    &item(app, "browse",     "Browse Contents")?,
     &sep(app)?,
     &item(app, "rename",     "Rename")?,
     &item(app, "copy",       "Copy")?,
@@ -62,6 +78,35 @@ fn build_file_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     &sep(app)?,
     &item(app, "properties", "Properties")?,
   ]).map_err(|e| e.to_string())
+}
+
+fn build_file_menu(app: &AppHandle, is_text: bool) -> Result<Menu<tauri::Wry>, String> {
+  if is_text {
+    Menu::with_items(app, &[
+      &item(app, "open",       "Open")?,
+      &item(app, "edit",       "Edit")?,
+      &sep(app)?,
+      &item(app, "rename",     "Rename")?,
+      &item(app, "copy",       "Copy")?,
+      &item(app, "cut",        "Cut")?,
+      &sep(app)?,
+      &item(app, "delete",     "Delete")?,
+      &sep(app)?,
+      &item(app, "properties", "Properties")?,
+    ]).map_err(|e| e.to_string())
+  } else {
+    Menu::with_items(app, &[
+      &item(app, "open",       "Open")?,
+      &sep(app)?,
+      &item(app, "rename",     "Rename")?,
+      &item(app, "copy",       "Copy")?,
+      &item(app, "cut",        "Cut")?,
+      &sep(app)?,
+      &item(app, "delete",     "Delete")?,
+      &sep(app)?,
+      &item(app, "properties", "Properties")?,
+    ]).map_err(|e| e.to_string())
+  }
 }
 
 // Multiple files selected — no Open / Rename
@@ -141,13 +186,20 @@ pub fn show_file_context_menu_cmd(
   kind: String,
   paths: Vec<String>,
   is_pinned: Option<bool>,
+  is_app_bundle: Option<bool>,
 ) -> Result<(), String> {
-  *state.paths.lock().unwrap() = paths;
+  *state.paths.lock().unwrap() = paths.clone();
   *state.kind.lock().unwrap() = kind.clone();
 
   let menu = match kind.as_str() {
     "empty" => build_empty_menu(&app)?,
-    "file"  => build_file_menu(&app)?,
+    "file" if is_app_bundle.unwrap_or(false) => build_app_bundle_menu(&app)?,
+    "file" => {
+      let is_text = paths.first()
+        .map(|p| is_likely_text(Path::new(p)))
+        .unwrap_or(false);
+      build_file_menu(&app, is_text)?
+    }
     "files" => build_files_menu(&app)?,
     "dir"   => build_dir_menu(&app)?,
     "dirs"  => build_dirs_menu(&app)?,

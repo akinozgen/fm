@@ -898,6 +898,8 @@ async function hookEvents() {
       if (!singlePath) return;
       if (kind === 'dir' || kind === 'sidebar_item') navigateTo(singlePath);
       else void openFile(singlePath);
+    } else if (action === 'browse') {
+      if (singlePath) navigateTo(singlePath);
     } else if (action === 'new_folder') {
       startCreateFolderDraft();
     } else if (action === 'new_file') {
@@ -928,6 +930,8 @@ async function hookEvents() {
         return { path: p, name, is_dir: isDir, ext: null, size: null, modified_ms: null };
       }).filter(Boolean);
       propertiesEntries.value = found;
+    } else if (action === 'edit') {
+      if (singlePath) void invoke('open_editor_cmd', { path: singlePath });
     } else if (action === 'pin_to_favorites' && singlePath) {
       void invoke('add_pinned_favorite_cmd', { path: singlePath })
         .then(() => loadSidebar())

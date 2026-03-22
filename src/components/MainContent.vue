@@ -92,7 +92,7 @@
           :title="entry.name"
           @click.stop="onEntryNameClick(entry, index, $event)"
         >{{ displayName(entry.name, 52, entry.is_dir, showExtensions) }}</span>
-        <span class="meta">{{ entry.is_dir ? 'Folder' : (entry.ext || 'File').toUpperCase() }}</span>
+        <span class="meta">{{ entry.is_app_bundle ? 'Application' : (entry.is_dir ? 'Folder' : (entry.ext || 'File').toUpperCase()) }}</span>
         <span class="meta">{{ formatSize(entry.size) }}</span>
         <span class="meta">{{ formatModified(entry.modified_ms) }}</span>
       </button>
@@ -354,7 +354,7 @@ function invertSelection() {
 function openEntry(entry) {
   if (renamingPath.value) return;
   if (entry.draft) return;
-  if (entry.is_dir) {
+  if (entry.is_dir && !entry.is_app_bundle) {
     emit('open-dir', entry.path);
   } else {
     emit('open-file', entry.path);
@@ -635,6 +635,7 @@ function onContentPointerCancel(event) {
   finishDrag();
 }
 
+
 function onContentContextMenu(event) {
   const target = resolveFileContextTarget(event, entries.value);
 
@@ -667,7 +668,10 @@ function onContentContextMenu(event) {
     kind = 'mixed';
   }
 
-  void showNativeFileContextMenu({ x: event.clientX, y: event.clientY, kind, paths });
+  const singleEntry = paths.length === 1 ? sel[0] ?? entries.value.find((e) => e.path === target.path) : null;
+  const isAppBundle = kind === 'file' && (singleEntry?.is_app_bundle ?? false);
+
+  void showNativeFileContextMenu({ x: event.clientX, y: event.clientY, kind, paths, isAppBundle });
 }
 
 function onWindowKeyDown(event) {

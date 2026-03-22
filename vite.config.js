@@ -11,5 +11,13 @@ export default defineConfig({
     port: 1420,
     strictPort: true
   },
-  clearScreen: false
+  clearScreen: false,
+  build: {
+    rollupOptions: {
+      input: {
+        main: './index.html',
+        editor: './editor.html',
+      }
+    }
+  }
 });

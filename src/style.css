@@ -15,7 +15,7 @@
 
 html,
 body {
-  background: transparent;
+  background: var(--bg);
 }
 
 body {
@@ -57,7 +57,7 @@ body * {
   grid-template-rows: auto 1fr;
   height: 100%;
   overflow: hidden;
-  background: transparent;
+  background: var(--bg);
 }
 
 .app-titlebar {
@@ -254,6 +254,10 @@ body * {
 /* macOS: native traffic lights sol üstte; kendi kontrollerimizi gizle, fm butonunu sağa kaydır */
 .app-shell[data-platform="macos"] .titlebar-win-controls {
   display: none;
+}
+
+.app-shell[data-platform="macos"] .app-titlebar {
+  min-height: 28px;
 }
 
 .app-shell[data-platform="macos"] .titlebar-left {

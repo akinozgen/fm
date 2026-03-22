@@ -72,6 +72,7 @@ pub struct DirEntryInfo {
   pub path: String,
   pub name: String,
   pub is_dir: bool,
+  pub is_app_bundle: bool,
   pub size: Option<u64>,
   pub modified_ms: Option<u128>,
   pub ext: Option<String>,
@@ -112,8 +113,23 @@ fn is_hidden_entry(name: &str, metadata: &std::fs::Metadata) -> bool {
   }
 }
 
+fn is_macos_app_bundle(path: &Path, is_dir: bool) -> bool {
+  #[cfg(target_os = "macos")]
+  {
+    is_dir
+      && path.extension().and_then(|s| s.to_str()) == Some("app")
+      && path.join("Contents/Info.plist").exists()
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    let _ = (path, is_dir);
+    false
+  }
+}
+
 fn to_entry_info(path: &Path, name: String, metadata: std::fs::Metadata) -> DirEntryInfo {
   let is_dir = metadata.is_dir();
+  let is_app_bundle = is_macos_app_bundle(path, is_dir);
   let size = if metadata.is_file() { Some(metadata.len()) } else { None };
   let modified_ms = metadata
     .modified()
@@ -127,6 +143,7 @@ fn to_entry_info(path: &Path, name: String, metadata: std::fs::Metadata) -> DirE
     path: path.to_string_lossy().to_string(),
     name,
     is_dir,
+    is_app_bundle,
     size,
     modified_ms,
     ext,

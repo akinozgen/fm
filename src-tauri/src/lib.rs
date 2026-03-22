@@ -1,11 +1,13 @@
+use std::collections::HashMap;
 use std::error::Error as _;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_os = "windows"))]
 use std::time::UNIX_EPOCH;
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State, WebviewUrl, WebviewWindowBuilder};
 
 mod core;
 mod context_menu;
@@ -60,6 +62,22 @@ impl DirWatchState {
   fn new() -> Self {
     Self {
       active: Mutex::new(None),
+    }
+  }
+}
+
+struct EditorState {
+  pending: Mutex<HashMap<String, String>>,
+  counter: AtomicU64,
+  watchers: Mutex<HashMap<String, notify::RecommendedWatcher>>,
+}
+
+impl EditorState {
+  fn new() -> Self {
+    Self {
+      pending: Mutex::new(HashMap::new()),
+      counter: AtomicU64::new(0),
+      watchers: Mutex::new(HashMap::new()),
     }
   }
 }
@@ -506,6 +524,7 @@ fn to_dir_entry_info(path: &std::path::Path, metadata: std::fs::Metadata) -> cor
     path: path.to_string_lossy().to_string(),
     name,
     is_dir,
+    is_app_bundle: false,
     size,
     modified_ms,
     ext,
@@ -539,6 +558,7 @@ fn list_trash_entries_cmd() -> Result<Vec<core::DirEntryInfo>, String> {
         path: rb_path.to_string_lossy().to_string(),
         name: name_str,
         is_dir,
+        is_app_bundle: false,
         size,
         modified_ms,
         ext,
@@ -675,6 +695,118 @@ fn show_address_menu_cmd(
     .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn read_text_file_cmd(path: String) -> Result<String, String> {
+  let path_buf = PathBuf::from(&path);
+  if !path_buf.is_file() {
+    return Err("path is not a file".to_string());
+  }
+  let size = std::fs::metadata(&path_buf).map(|m| m.len()).unwrap_or(0);
+  if size > 2 * 1024 * 1024 {
+    return Err(format!("file is too large to edit ({} MB)", size / 1024 / 1024));
+  }
+  std::fs::read_to_string(&path_buf).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn write_text_file_cmd(path: String, content: String) -> Result<(), String> {
+  let path_buf = PathBuf::from(&path);
+  if !path_buf.is_file() {
+    return Err("file does not exist".to_string());
+  }
+  let Some(parent) = path_buf.parent() else {
+    return Err("cannot determine parent directory".to_string());
+  };
+  let tmp_path = parent.join(format!(".fm_write_{}.tmp", std::process::id()));
+  std::fs::write(&tmp_path, content.as_bytes()).map_err(|e| e.to_string())?;
+  std::fs::rename(&tmp_path, &path_buf).map_err(|e| {
+    let _ = std::fs::remove_file(&tmp_path);
+    e.to_string()
+  })?;
+  Ok(())
+}
+
+#[tauri::command]
+fn open_editor_cmd(
+  app: AppHandle,
+  state: State<'_, EditorState>,
+  path: String,
+) -> Result<(), String> {
+  let path_buf = PathBuf::from(&path);
+  if !path_buf.is_file() {
+    return Err("file does not exist".to_string());
+  }
+  let title = path_buf
+    .file_name()
+    .and_then(|n| n.to_str())
+    .unwrap_or("Edit")
+    .to_string();
+  let count = state.counter.fetch_add(1, Ordering::SeqCst);
+  let label = format!("editor-{}", count);
+  {
+    let mut map = state.pending.lock().unwrap();
+    map.insert(label.clone(), path);
+  }
+  let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("editor.html".into()))
+    .title(&title)
+    .inner_size(800.0, 600.0)
+    .min_inner_size(500.0, 400.0);
+
+  #[cfg(target_os = "macos")]
+  let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+
+  #[cfg(not(target_os = "macos"))]
+  let builder = builder.decorations(false);
+
+  builder.build().map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+fn get_editor_path_cmd(state: State<'_, EditorState>, label: String) -> Result<String, String> {
+  let mut map = state.pending.lock().unwrap();
+  map.remove(&label).ok_or_else(|| "no pending path for this editor window".to_string())
+}
+
+/// Watch a specific file for external modifications and notify the editor window.
+/// Uses the parent directory with a filename filter to work on all platforms.
+#[tauri::command]
+fn watch_editor_file_cmd(
+  app: AppHandle,
+  state: State<'_, EditorState>,
+  label: String,
+  path: String,
+) -> Result<(), String> {
+  let path_buf = std::path::PathBuf::from(&path);
+  let parent = path_buf.parent().ok_or("cannot determine parent directory")?.to_path_buf();
+  let file_name = path_buf.file_name().ok_or("cannot determine filename")?.to_os_string();
+
+  let label_clone = label.clone();
+  let path_clone = path.clone();
+
+  let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+    let Ok(event) = res else { return };
+    if matches!(event.kind, EventKind::Access(_)) { return; }
+    if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) { return; }
+    if !event.paths.iter().any(|p| p.file_name() == Some(file_name.as_os_str())) { return; }
+    if let Some(win) = app.get_webview_window(&label_clone) {
+      let _ = win.emit("fm://editor-file-changed", &path_clone);
+    }
+  })
+  .map_err(|e| e.to_string())?;
+
+  watcher.watch(&parent, RecursiveMode::NonRecursive).map_err(|e| e.to_string())?;
+  state.watchers.lock().unwrap().insert(label, watcher);
+  Ok(())
+}
+
+/// Stop watching a file when its editor window closes.
+#[tauri::command]
+fn unwatch_editor_file_cmd(state: State<'_, EditorState>, label: String) -> Result<(), String> {
+  state.watchers.lock().unwrap().remove(&label);
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let storage_paths = bootstrap_storage().expect("failed to bootstrap storage");
@@ -688,6 +820,7 @@ pub fn run() {
     .manage(DirSizeState::new())
     .manage(ContextMenuState::new())
     .manage(transfer::TransferState::new())
+    .manage(EditorState::new())
     .invoke_handler(tauri::generate_handler![
       read_dir_cmd,
       walk_dir_cmd,
@@ -720,9 +853,35 @@ pub fn run() {
       transfer::paste_cmd,
       transfer::cancel_transfer_cmd,
       transfer::pause_transfer_cmd,
-      transfer::resume_transfer_cmd
+      transfer::resume_transfer_cmd,
+      read_text_file_cmd,
+      write_text_file_cmd,
+      open_editor_cmd,
+      get_editor_path_cmd,
+      watch_editor_file_cmd,
+      unwatch_editor_file_cmd,
     ])
     .setup(|app| {
+      // Create main window programmatically so we can apply platform-specific titlebar settings.
+      // (Config-file windows are created before setup runs and can't be reconfigured after the fact.)
+      {
+        let url = WebviewUrl::App("/".into());
+
+        let builder = WebviewWindowBuilder::new(app.handle(), "main", url)
+          .title("FM")
+          .inner_size(800.0, 600.0)
+          .min_inner_size(760.0, 480.0)
+          .resizable(true);
+
+        #[cfg(target_os = "macos")]
+        let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.decorations(false);
+
+        builder.build()?;
+      }
+
       let handle = app.handle();
       let copy_item = MenuItem::with_id(handle, "address.copy", "Copy Address", true, None::<&str>)?;
       let clear_item = MenuItem::with_id(handle, "address.clear", "Clear History", true, None::<&str>)?;

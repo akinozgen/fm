@@ -11,7 +11,7 @@ export function resolveFileContextTarget(event, entries) {
   }
 
   return {
-    kind: entry.is_dir ? 'dir' : 'file',
+    kind: (entry.is_dir && !entry.is_app_bundle) ? 'dir' : 'file',
     path: entry.path
   };
 }

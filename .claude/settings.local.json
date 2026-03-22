@@ -6,7 +6,10 @@
       "WebSearch",
       "WebFetch(domain:v2.tauri.app)",
       "Bash(cargo check:*)",
-      "Bash(du:*)"
+      "Bash(du:*)",
+      "Bash(npm install:*)",
+      "Bash(node -e \"const m = require\\(''./node_modules/@codemirror/merge/dist/index.cjs''\\); console.log\\(''MergeView:'', typeof m.MergeView\\)\")",
+      "Bash(node -e \"const s = require\\(''./node_modules/@codemirror/search/dist/index.cjs''\\); console.log\\(''openSearchPanel:'', typeof s.openSearchPanel\\)\")"
     ]
   }
 }
