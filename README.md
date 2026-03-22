@@ -56,6 +56,10 @@ npm run dev
 - `src/components/` — UI components
 - `src-tauri/src/` — Rust backend
 
+## Credits
+
+- App icon: [Folder icons created by cahiwak - Flaticon](https://www.flaticon.com/free-icons/folder)
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

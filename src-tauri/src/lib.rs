@@ -27,7 +27,8 @@ use icons::get_file_icon_png_base64;
 use sidebar::build_sidebar;
 use storage::{bootstrap_storage, StoragePaths};
 use thumbnails::ThumbnailState;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{AboutMetadata, CheckMenuItem, IsMenuItem, Menu, MenuBuilder, MenuItem,
+                  PredefinedMenuItem, SubmenuBuilder};
 
 struct AddressMenuState {
   menu: Mutex<Option<Menu<tauri::Wry>>>,
@@ -120,6 +121,195 @@ impl ArchiveState {
       cancels: Mutex::new(HashMap::new()),
     }
   }
+}
+
+// ── App menu dynamic path store ───────────────────────────────────────────────
+struct MenuPathStore {
+  vol_paths:     Mutex<Vec<String>>,
+  home_paths:    Mutex<Vec<String>>,
+  history_paths: Mutex<Vec<String>>,
+}
+
+impl MenuPathStore {
+  fn new() -> Self {
+    Self {
+      vol_paths:     Mutex::new(Vec::new()),
+      home_paths:    Mutex::new(Vec::new()),
+      history_paths: Mutex::new(Vec::new()),
+    }
+  }
+}
+
+// ── App menu params (from JS) ─────────────────────────────────────────────────
+#[derive(serde::Deserialize, Clone)]
+struct MenuVolume {
+  label: String,
+  path:  String,
+}
+
+#[derive(serde::Deserialize)]
+struct AppMenuParams {
+  view_mode:       String,
+  show_hidden:     bool,
+  show_extensions: bool,
+  show_checkboxes: bool,
+  sort_by:         String,
+  sort_dir:        String,
+  can_go_back:     bool,
+  can_go_forward:  bool,
+  can_go_up:       bool,
+  history_paths:   Vec<String>,
+  volumes:         Vec<MenuVolume>,
+  home_dirs:       Vec<MenuVolume>,
+  has_selection:   bool,
+  has_clipboard:   bool,
+}
+
+// ── macOS menu builder ────────────────────────────────────────────────────────
+#[cfg(target_os = "macos")]
+fn build_and_set_macos_menu(app: &AppHandle, p: AppMenuParams) -> Result<(), String> {
+  let e = |e: tauri::Error| e.to_string();
+
+  // Update path store so on_menu_event can resolve IDs → paths
+  if let Some(store) = app.try_state::<MenuPathStore>() {
+    *store.vol_paths.lock().unwrap()     = p.volumes.iter().map(|v| v.path.clone()).collect();
+    *store.home_paths.lock().unwrap()    = p.home_dirs.iter().map(|v| v.path.clone()).collect();
+    *store.history_paths.lock().unwrap() = p.history_paths.clone();
+  }
+
+  // ── FM submenu ──
+  let make_about = || AboutMetadata {
+    name:          Some("FM".to_string()),
+    version:       Some(env!("CARGO_PKG_VERSION").to_string()),
+    short_version: None,
+    authors:       Some(vec!["Akın Özgen".to_string()]),
+    comments:      Some("A cross-platform file manager that bridges modern web technologies with native OS capabilities.".to_string()),
+    copyright:     Some("© 2026 Akın Özgen".to_string()),
+    license:       Some("MIT".to_string()),
+    website:       Some("https://akinozgen.com".to_string()),
+    website_label: Some("akinozgen.com".to_string()),
+    credits:       Some(concat!(
+      "Website\nhttps://akinozgen.com/projects/fm\n\n",
+      "Source Code\nhttps://github.com/akinozgen/fm\n\n",
+      "License\nMIT — Permission is hereby granted, free of charge, to any\n",
+      "person obtaining a copy of this software to use, copy, modify,\n",
+      "merge, publish, distribute, sublicense, and/or sell copies of\n",
+      "the Software, subject to the above copyright notice.",
+    ).to_string()),
+    icon:          None,
+  };
+  let fm_submenu = SubmenuBuilder::new(app, "FM")
+    .item(&PredefinedMenuItem::about(app, Some("About FM"), Some(make_about())).map_err(e)?)
+    .separator()
+    .item(&MenuItem::with_id(app, "menu.fm.website", "Website", true, None::<&str>).map_err(e)?)
+    .separator()
+    .services()
+    .separator()
+    .hide()
+    .hide_others()
+    .show_all()
+    .separator()
+    .quit()
+    .build()
+    .map_err(e)?;
+
+  // ── Edit submenu ──
+  let edit_submenu = SubmenuBuilder::new(app, "Edit")
+    .item(&MenuItem::with_id(app, "menu.edit.cut",        "Cut",              p.has_selection, None::<&str>).map_err(e)?)
+    .item(&MenuItem::with_id(app, "menu.edit.copy",       "Copy",             p.has_selection, None::<&str>).map_err(e)?)
+    .item(&MenuItem::with_id(app, "menu.edit.paste",      "Paste",            p.has_clipboard, None::<&str>).map_err(e)?)
+    .separator()
+    .item(&MenuItem::with_id(app, "menu.edit.select_all", "Select All",       true,            None::<&str>).map_err(e)?)
+    .item(&MenuItem::with_id(app, "menu.edit.invert",     "Invert Selection", true,            None::<&str>).map_err(e)?)
+    .item(&MenuItem::with_id(app, "menu.edit.clear",      "Clear Selection",  true,            None::<&str>).map_err(e)?)
+    .build()
+    .map_err(e)?;
+
+  // ── View submenu ──
+  let view_submenu = SubmenuBuilder::new(app, "View")
+    .item(&CheckMenuItem::with_id(app, "menu.view.list",       "List View",        true, p.view_mode == "list",     None::<&str>).map_err(e)?)
+    .item(&CheckMenuItem::with_id(app, "menu.view.grid",       "Grid View",        true, p.view_mode == "grid",     None::<&str>).map_err(e)?)
+    .separator()
+    .item(&CheckMenuItem::with_id(app, "menu.view.hidden",     "Show Hidden Files",  true, p.show_hidden,     None::<&str>).map_err(e)?)
+    .item(&CheckMenuItem::with_id(app, "menu.view.extensions", "Show Extensions",    true, p.show_extensions, None::<&str>).map_err(e)?)
+    .item(&CheckMenuItem::with_id(app, "menu.view.checkboxes", "Show Checkboxes",    true, p.show_checkboxes, None::<&str>).map_err(e)?)
+    .separator()
+    .item(&CheckMenuItem::with_id(app, "menu.view.sort_name",     "Sort by Name",  true, p.sort_by == "name",     None::<&str>).map_err(e)?)
+    .item(&CheckMenuItem::with_id(app, "menu.view.sort_type",     "Sort by Type",  true, p.sort_by == "type",     None::<&str>).map_err(e)?)
+    .item(&CheckMenuItem::with_id(app, "menu.view.sort_size",     "Sort by Size",  true, p.sort_by == "size",     None::<&str>).map_err(e)?)
+    .item(&CheckMenuItem::with_id(app, "menu.view.sort_modified", "Sort by Date",  true, p.sort_by == "modified", None::<&str>).map_err(e)?)
+    .separator()
+    .item(&CheckMenuItem::with_id(app, "menu.view.sort_asc",  "Ascending",  true, p.sort_dir == "asc",  None::<&str>).map_err(e)?)
+    .item(&CheckMenuItem::with_id(app, "menu.view.sort_desc", "Descending", true, p.sort_dir == "desc", None::<&str>).map_err(e)?)
+    .build()
+    .map_err(e)?;
+
+  // ── History submenu ──
+  let back_item = MenuItem::with_id(app, "menu.history.back",    "Previous",      p.can_go_back,    None::<&str>).map_err(e)?;
+  let fwd_item  = MenuItem::with_id(app, "menu.history.forward", "Next",          p.can_go_forward, None::<&str>).map_err(e)?;
+  let up_item   = MenuItem::with_id(app, "menu.history.up",      "Directory Up",  p.can_go_up,      None::<&str>).map_err(e)?;
+  let hist_sep  = PredefinedMenuItem::separator(app).map_err(e)?;
+  let recent_items: Vec<MenuItem<tauri::Wry>> = p.history_paths.iter().enumerate()
+    .map(|(i, path)| {
+      let name = std::path::Path::new(path)
+        .file_name().and_then(|n| n.to_str()).unwrap_or(path.as_str()).to_string();
+      MenuItem::with_id(app, format!("menu.history.recent.{i}"), name, true, None::<&str>)
+    })
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(e)?;
+  let mut hist_dyn: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&back_item, &fwd_item, &up_item, &hist_sep];
+  for item in &recent_items { hist_dyn.push(item); }
+  let history_submenu = SubmenuBuilder::new(app, "History").items(&hist_dyn).build().map_err(e)?;
+
+  // ── Go submenu ──
+  let addr_item = MenuItem::with_id(app, "menu.go.address", "Go to Directory\u{2026}", true, None::<&str>).map_err(e)?;
+  let go_sep1   = PredefinedMenuItem::separator(app).map_err(e)?;
+  let go_sep2   = PredefinedMenuItem::separator(app).map_err(e)?;
+  let vol_items: Vec<MenuItem<tauri::Wry>> = p.volumes.iter().enumerate()
+    .map(|(i, v)| MenuItem::with_id(app, format!("menu.go.vol.{i}"), &v.label, true, None::<&str>))
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(e)?;
+  let home_items: Vec<MenuItem<tauri::Wry>> = p.home_dirs.iter().enumerate()
+    .map(|(i, v)| MenuItem::with_id(app, format!("menu.go.home.{i}"), &v.label, true, None::<&str>))
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(e)?;
+  let mut go_dyn: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&addr_item, &go_sep1];
+  for item in &vol_items  { go_dyn.push(item); }
+  go_dyn.push(&go_sep2);
+  for item in &home_items { go_dyn.push(item); }
+  let go_submenu = SubmenuBuilder::new(app, "Go").items(&go_dyn).build().map_err(e)?;
+
+  // ── Help submenu ──
+  let help_about = PredefinedMenuItem::about(app, Some("About FM"), Some(make_about())).map_err(e)?;
+  let help_submenu = SubmenuBuilder::new(app, "Help")
+    .item(&help_about)
+    .separator()
+    .item(&MenuItem::with_id(app, "menu.help.website", "Website",      true, None::<&str>).map_err(e)?)
+    .item(&MenuItem::with_id(app, "menu.help.source",  "Source Code",  true, None::<&str>).map_err(e)?)
+    .item(&MenuItem::with_id(app, "menu.help.issue",   "Open an Issue",true, None::<&str>).map_err(e)?)
+    .separator()
+    .item(&MenuItem::with_id(app, "menu.help.email",   "Write Me",     true, None::<&str>).map_err(e)?)
+    .build()
+    .map_err(e)?;
+
+  let menu = MenuBuilder::new(app)
+    .item(&fm_submenu)
+    .item(&edit_submenu)
+    .item(&view_submenu)
+    .item(&history_submenu)
+    .item(&go_submenu)
+    .item(&help_submenu)
+    .build()
+    .map_err(e)?;
+  app.set_menu(menu).map(|_| ()).map_err(e)
+}
+
+#[tauri::command]
+fn rebuild_app_menu_cmd(app: AppHandle, params: AppMenuParams) -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  return build_and_set_macos_menu(&app, params);
+  #[cfg(not(target_os = "macos"))]
+  { let _ = params; Ok(()) }
 }
 
 #[tauri::command]
@@ -1175,6 +1365,7 @@ pub fn run() {
     .manage(transfer::TransferState::new())
     .manage(EditorState::new())
     .manage(ArchiveState::new())
+    .manage(MenuPathStore::new())
     .invoke_handler(tauri::generate_handler![
       read_dir_cmd,
       walk_dir_cmd,
@@ -1222,6 +1413,7 @@ pub fn run() {
       get_archive_dialog_params_cmd,
       run_archive_cmd,
       cancel_archive_cmd,
+      rebuild_app_menu_cmd,
     ])
     .setup(|app| {
       // Create main window programmatically so we can apply platform-specific titlebar settings.
@@ -1260,6 +1452,25 @@ pub fn run() {
       if let Some(state) = app.try_state::<NewItemMenuState>() {
         *state.menu.lock().unwrap() = Some(new_menu);
       }
+
+      // macOS app menu — initial build with defaults; JS will rebuild with real state on mount
+      #[cfg(target_os = "macos")]
+      build_and_set_macos_menu(app.handle(), AppMenuParams {
+        view_mode:       "list".to_string(),
+        show_hidden:     false,
+        show_extensions: true,
+        show_checkboxes: false,
+        sort_by:         "name".to_string(),
+        sort_dir:        "asc".to_string(),
+        can_go_back:     false,
+        can_go_forward:  false,
+        can_go_up:       false,
+        history_paths:   Vec::new(),
+        volumes:         Vec::new(),
+        home_dirs:       Vec::new(),
+        has_selection:   false,
+        has_clipboard:   false,
+      }).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -1315,7 +1526,61 @@ pub fn run() {
         let _ = app.emit("fm://new-item-menu", "folder");
       } else if id.starts_with("context.") {
         context_menu::handle_menu_event(app, id);
-      }
+      } else if id == "menu.fm.website" {
+        let _ = opener::open("https://github.com/akinozgen/fm");
+      } else if id == "menu.edit.cut"        { let _ = app.emit("fm://menu-action", "cut"); }
+        else if id == "menu.edit.copy"       { let _ = app.emit("fm://menu-action", "copy"); }
+        else if id == "menu.edit.paste"      { let _ = app.emit("fm://menu-action", "paste"); }
+        else if id == "menu.edit.select_all" { let _ = app.emit("fm://menu-action", "select_all"); }
+        else if id == "menu.edit.invert"     { let _ = app.emit("fm://menu-action", "invert_selection"); }
+        else if id == "menu.edit.clear"      { let _ = app.emit("fm://menu-action", "clear_selection"); }
+        else if id == "menu.view.list"       { let _ = app.emit("fm://menu-action", "view_mode:list"); }
+        else if id == "menu.view.grid"       { let _ = app.emit("fm://menu-action", "view_mode:grid"); }
+        else if id == "menu.view.hidden"     { let _ = app.emit("fm://menu-action", "toggle_hidden"); }
+        else if id == "menu.view.extensions" { let _ = app.emit("fm://menu-action", "toggle_extensions"); }
+        else if id == "menu.view.checkboxes" { let _ = app.emit("fm://menu-action", "toggle_checkboxes"); }
+        else if id == "menu.view.sort_name"     { let _ = app.emit("fm://menu-action", "sort_by:name"); }
+        else if id == "menu.view.sort_type"     { let _ = app.emit("fm://menu-action", "sort_by:type"); }
+        else if id == "menu.view.sort_size"     { let _ = app.emit("fm://menu-action", "sort_by:size"); }
+        else if id == "menu.view.sort_modified" { let _ = app.emit("fm://menu-action", "sort_by:modified"); }
+        else if id == "menu.view.sort_asc"   { let _ = app.emit("fm://menu-action", "sort_dir:asc"); }
+        else if id == "menu.view.sort_desc"  { let _ = app.emit("fm://menu-action", "sort_dir:desc"); }
+        else if id == "menu.history.back"    { let _ = app.emit("fm://menu-action", "history_back"); }
+        else if id == "menu.history.forward" { let _ = app.emit("fm://menu-action", "history_forward"); }
+        else if id == "menu.history.up"      { let _ = app.emit("fm://menu-action", "history_up"); }
+        else if id == "menu.go.address"      { let _ = app.emit("fm://menu-action", "focus_address"); }
+        else if id == "menu.help.website"    { let _ = opener::open("https://akinozgen.com/projects/fm"); }
+        else if id == "menu.help.source"     { let _ = opener::open("https://github.com/akinozgen/fm"); }
+        else if id == "menu.help.issue"      { let _ = opener::open("https://github.com/akinozgen/fm/issues/new"); }
+        else if id == "menu.help.email"      { let _ = opener::open("mailto:akinozgen@protonmail.com"); }
+        else if let Some(idx_str) = id.strip_prefix("menu.history.recent.") {
+          if let Ok(idx) = idx_str.parse::<usize>() {
+            if let Some(store) = app.try_state::<MenuPathStore>() {
+              let paths = store.history_paths.lock().unwrap();
+              if let Some(path) = paths.get(idx) {
+                let _ = app.emit("fm://menu-action", format!("navigate:{path}"));
+              }
+            }
+          }
+        } else if let Some(idx_str) = id.strip_prefix("menu.go.vol.") {
+          if let Ok(idx) = idx_str.parse::<usize>() {
+            if let Some(store) = app.try_state::<MenuPathStore>() {
+              let paths = store.vol_paths.lock().unwrap();
+              if let Some(path) = paths.get(idx) {
+                let _ = app.emit("fm://menu-action", format!("navigate:{path}"));
+              }
+            }
+          }
+        } else if let Some(idx_str) = id.strip_prefix("menu.go.home.") {
+          if let Ok(idx) = idx_str.parse::<usize>() {
+            if let Some(store) = app.try_state::<MenuPathStore>() {
+              let paths = store.home_paths.lock().unwrap();
+              if let Some(path) = paths.get(idx) {
+                let _ = app.emit("fm://menu-action", format!("navigate:{path}"));
+              }
+            }
+          }
+        }
     })
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

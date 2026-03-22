@@ -145,7 +145,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ActionToolbar from './components/ActionToolbar.vue';
 import DetailsPane from './components/DetailsPane.vue';
 import MainContent from './components/MainContent.vue';
@@ -862,6 +862,43 @@ function onResumeTransfer(jobId) {
   resumeTransfer(jobId);
 }
 
+async function rebuildAppMenu() {
+  const volumes = [];
+  const homeDirs = [];
+  for (const section of sidebarSections.value) {
+    for (const item of section.items) {
+      if (item.kind === 'device' || item.kind === 'device_removable')
+        volumes.push({ label: item.label, path: item.path });
+      if (item.kind === 'home' || item.kind === 'folder')
+        homeDirs.push({ label: item.label, path: item.path });
+    }
+  }
+  const seen = new Set();
+  const recentHistory = [...pathHistory.value].reverse().filter(p => {
+    if (seen.has(p)) return false;
+    seen.add(p);
+    return true;
+  }).slice(0, 5);
+  try {
+    await invoke('rebuild_app_menu_cmd', { params: {
+      view_mode:       viewMode.value,
+      show_hidden:     showHidden.value,
+      show_extensions: showExtensions.value,
+      show_checkboxes: showSelectionCheckboxes.value,
+      sort_by:         sortBy.value,
+      sort_dir:        sortDir.value,
+      can_go_back:     historyIndex.value > 0,
+      can_go_forward:  historyIndex.value < pathHistory.value.length - 1,
+      can_go_up:       !showWelcome.value && !!currentPath.value && !isWelcomePath(currentPath.value),
+      history_paths:   recentHistory,
+      volumes,
+      home_dirs:       homeDirs,
+      has_selection:   selectedPaths.value.length > 0,
+      has_clipboard:   clipboardPaths.value.length > 0,
+    }});
+  } catch { /* non-macOS or early init */ }
+}
+
 async function hookEvents() {
   const unlistenMenu = await listen('fm://address-menu', async (event) => {
     if (event.payload === 'copy') {
@@ -1018,7 +1055,27 @@ async function hookEvents() {
     else if (event.payload === 'folder') startCreateFolderDraft();
   });
 
-  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo, unlistenProgress, unlistenDone, unlistenDisksChanged, unlistenNewItem);
+  const unlistenMenuAction = await listen('fm://menu-action', ({ payload }) => {
+    if      (payload === 'cut')               onCut();
+    else if (payload === 'copy')              onCopy();
+    else if (payload === 'paste')             onPaste();
+    else if (payload === 'select_all')        selectAll();
+    else if (payload === 'invert_selection')  selectInverse();
+    else if (payload === 'clear_selection')   deselectAll();
+    else if (payload === 'history_back')      navigateBack();
+    else if (payload === 'history_forward')   navigateForward();
+    else if (payload === 'history_up')        navigateUp();
+    else if (payload === 'focus_address')     focusAddressBar();
+    else if (payload === 'toggle_hidden')     setShowHidden(!showHidden.value);
+    else if (payload === 'toggle_extensions') showExtensions.value = !showExtensions.value;
+    else if (payload === 'toggle_checkboxes') showSelectionCheckboxes.value = !showSelectionCheckboxes.value;
+    else if (payload.startsWith('view_mode:'))  viewMode.value = payload.slice(10);
+    else if (payload.startsWith('sort_by:'))    sortBy.value = payload.slice(8);
+    else if (payload.startsWith('sort_dir:'))   sortDir.value = payload.slice(9);
+    else if (payload.startsWith('navigate:'))   navigateTo(payload.slice(9));
+  });
+
+  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo, unlistenProgress, unlistenDone, unlistenDisksChanged, unlistenNewItem, unlistenMenuAction);
 }
 
 // Keys that have no meaning in a file manager but trigger browser defaults.
@@ -1157,6 +1214,15 @@ onMounted(async () => {
   });
   await hookEvents();
   await loadSidebar();
+  await rebuildAppMenu();
+
+  watch(
+    [viewMode, showHidden, showExtensions, showSelectionCheckboxes,
+     sortBy, sortDir, historyIndex, pathHistory, sidebarSections,
+     selectedPaths, clipboardPaths],
+    rebuildAppMenu,
+    { deep: true }
+  );
 });
 
 onBeforeUnmount(async () => {
