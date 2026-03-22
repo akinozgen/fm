@@ -41,6 +41,15 @@
             >
               <PinOff :size="12" />
             </button>
+            <button
+              v-if="item.kind === 'device_removable'"
+              type="button"
+              class="tree-item-unpin"
+              title="Unmount"
+              @click.stop="$emit('unmount', item.path)"
+            >
+              <Unplug :size="12" />
+            </button>
           </div>
         </div>
       </div>
@@ -63,6 +72,7 @@ import {
   PictureInPicture2,
   PinOff,
   Trash2,
+  Unplug,
   Usb,
   Video
 } from 'lucide-vue-next';
@@ -70,7 +80,7 @@ import { reactive, ref } from 'vue';
 import { isVirtualPath, normalizePath } from '../lib/virtualPaths';
 import { showNativeFileContextMenu } from '../lib/contextMenu';
 
-const emit = defineEmits(['resize-start', 'navigate', 'unpin', 'reorder-pinned']);
+const emit = defineEmits(['resize-start', 'navigate', 'unpin', 'reorder-pinned', 'unmount']);
 const props = defineProps({
   sections: {
     type: Array,

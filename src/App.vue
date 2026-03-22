@@ -16,27 +16,14 @@
         </div>
       </div>
       <div class="titlebar-right">
-        <div ref="newItemWrapRef" class="titlebar-new-wrap">
-          <button
-            type="button"
-            class="titlebar-btn"
-            :class="{ active: newItemPopoutOpen }"
-            title="New file or folder"
-            @click.stop="newItemPopoutOpen = !newItemPopoutOpen"
-          >
-            <Plus :size="14" />
-          </button>
-          <div v-if="newItemPopoutOpen" class="titlebar-new-popout" @click.stop>
-            <button type="button" class="titlebar-new-option" @click="onNewFile">
-              <FileText :size="14" />
-              <span>New file</span>
-            </button>
-            <button type="button" class="titlebar-new-option" @click="onNewFolder">
-              <FolderPlus :size="14" />
-              <span>New folder</span>
-            </button>
-          </div>
-        </div>
+        <button
+          type="button"
+          class="titlebar-btn"
+          title="New file or folder"
+          @click.stop="onNewItemClick($event)"
+        >
+          <Plus :size="14" />
+        </button>
         <div class="titlebar-win-controls">
           <WinControls />
         </div>
@@ -49,6 +36,7 @@
       @navigate="navigateTo"
       @unpin="onUnpinFavorite"
       @reorder-pinned="onReorderPinned"
+      @unmount="onUnmountDrive"
     />
     <main class="main">
       <Toolbar
@@ -191,7 +179,7 @@ import {
   isWelcomePath,
   normalizePath
 } from './lib/virtualPaths';
-import { FileText, FolderOpen, FolderPlus, Plus, Search } from 'lucide-vue-next';
+import { FolderOpen, Plus, Search } from 'lucide-vue-next';
 import Sidebar from './components/Sidebar.vue';
 import Toolbar from './components/Toolbar.vue';
 import WelcomePage from './components/WelcomePage.vue';
@@ -216,8 +204,6 @@ const showWelcome = ref(true);
 const manualPathHistory = ref([]);
 const mainContentRef = ref(null);
 const toolbarRef = ref(null);
-const newItemWrapRef = ref(null);
-const newItemPopoutOpen = ref(false);
 const propertiesEntries = ref([]);
 const selectedPaths = ref([]);
 
@@ -432,6 +418,35 @@ async function onUnpinFavorite(path) {
   }
 }
 
+function sidebarHomePath() {
+  for (const section of sidebarSections.value) {
+    for (const item of (section.items || [])) {
+      if (item.kind === 'home') return item.path;
+    }
+  }
+  return null;
+}
+
+function redirectIfUnderPath(unmountedPath) {
+  const cur = currentPath.value;
+  if (!cur) return;
+  const norm = unmountedPath.replace(/\/$/, '');
+  if (cur === norm || cur.startsWith(norm + '/') || cur.startsWith(norm + '\\')) {
+    const home = sidebarHomePath();
+    if (home) navigateTo(home, { shouldRecordHistory: false });
+  }
+}
+
+async function onUnmountDrive(path) {
+  try {
+    await invoke('unmount_drive_cmd', { path });
+    redirectIfUnderPath(path);
+    await loadSidebar();
+  } catch (err) {
+    console.error('unmount failed', err);
+  }
+}
+
 async function onReorderPinned(newOrder) {
   try {
     await invoke('set_pinned_favorites_cmd', { paths: newOrder });
@@ -467,20 +482,8 @@ function onAddressBarOpenFailed(message) {
   console.warn('[Address bar] Open failed:', message);
 }
 
-function onNewFile() {
-  newItemPopoutOpen.value = false;
-  void startCreateFileDraft();
-}
-
-function onNewFolder() {
-  newItemPopoutOpen.value = false;
-  void startCreateFolderDraft();
-}
-
-function onNewItemWindowClick(e) {
-  if (newItemPopoutOpen.value && newItemWrapRef.value && !newItemWrapRef.value.contains(e.target)) {
-    newItemPopoutOpen.value = false;
-  }
+function onNewItemClick(event) {
+  invoke('show_new_item_menu_cmd', { x: event.clientX, y: event.clientY });
 }
 
 async function startCreateFileDraft() {
@@ -632,7 +635,10 @@ function onSelectionChange(paths) {
   selectedPaths.value = Array.isArray(paths) ? paths : [];
 }
 
+let deleteBusy = false;
+
 async function deleteSelected(options = {}) {
+  if (deleteBusy) return;
   if (!currentPath.value) return;
   const fromTrashView = isTrashView.value;
   const permanent = !!options.permanent || fromTrashView;
@@ -650,6 +656,7 @@ async function deleteSelected(options = {}) {
   }
   if (targets.length === 0) return;
 
+  deleteBusy = true;
   const { confirm } = await import('@tauri-apps/plugin-dialog');
   const itemWord = targets.length === 1 ? 'item' : 'items';
   const allowed = await confirm(
@@ -665,7 +672,10 @@ async function deleteSelected(options = {}) {
       cancelLabel: 'Cancel'
     }
   );
-  if (!allowed) return;
+  if (!allowed) {
+    deleteBusy = false;
+    return;
+  }
 
   try {
     await invoke('delete_paths_cmd', { paths: targets, permanent });
@@ -675,6 +685,7 @@ async function deleteSelected(options = {}) {
     const text = typeof error === 'string' ? error : (error?.message ?? String(error));
     await message(text, { title: 'Delete failed', kind: 'error' });
   } finally {
+    deleteBusy = false;
     await navigateTo(currentPath.value, {
       shouldRecordHistory: false,
       includeHidden: showHidden.value
@@ -711,11 +722,25 @@ async function onViewModeChange(mode) {
   }
 }
 
+const DISK_IMAGE_EXTS = ['.dmg', '.iso', '.img', '.cdr', '.toast'];
+function isDiskImage(path) {
+  const lower = path.toLowerCase();
+  return DISK_IMAGE_EXTS.some((ext) => lower.endsWith(ext));
+}
+
 async function openFile(path) {
+  if (isDiskImage(path)) {
+    try {
+      const mountPath = await invoke('mount_disk_image_cmd', { path });
+      if (mountPath) { navigateTo(mountPath); return; }
+    } catch {
+      // fall through to regular open
+    }
+  }
   try {
     await invoke('open_path_cmd', { path });
   } catch {
-    // Ignore open errors for now; UI feedback can be added later.
+    // ignore
   }
 }
 
@@ -932,6 +957,16 @@ async function hookEvents() {
       propertiesEntries.value = found;
     } else if (action === 'edit') {
       if (singlePath) void invoke('open_editor_cmd', { path: singlePath });
+    } else if (action === 'mount') {
+      if (singlePath) {
+        invoke('mount_disk_image_cmd', { path: singlePath })
+          .then((mountPath) => { if (mountPath) navigateTo(mountPath); })
+          .catch((err) => console.error('mount failed', err));
+      }
+    } else if (action === 'extract') {
+      if (singlePath) void invoke('open_extract_dialog_cmd', { path: singlePath });
+    } else if (action === 'archive') {
+      void invoke('open_archive_dialog_cmd', { paths, destDir: currentPath.value ?? '', selectionKind: kind });
     } else if (action === 'pin_to_favorites' && singlePath) {
       void invoke('add_pinned_favorite_cmd', { path: singlePath })
         .then(() => loadSidebar())
@@ -965,7 +1000,25 @@ async function hookEvents() {
     if (d.errors && d.errors.length) console.error('Transfer errors:', d.errors);
   });
 
-  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo, unlistenProgress, unlistenDone);
+  const unlistenDisksChanged = await listen('fm://disks-changed', async () => {
+    await loadSidebar();
+    // If the current directory no longer exists (e.g. Finder unmounted a volume
+    // we were browsing), redirect to home rather than showing an empty view.
+    if (currentPath.value && currentPath.value !== FM_WELCOME) {
+      const valid = await invoke('is_valid_dir_cmd', { path: currentPath.value }).catch(() => false);
+      if (!valid) {
+        const home = sidebarHomePath();
+        if (home) navigateTo(home, { shouldRecordHistory: false });
+      }
+    }
+  });
+
+  const unlistenNewItem = await listen('fm://new-item-menu', (event) => {
+    if (event.payload === 'file') startCreateFileDraft();
+    else if (event.payload === 'folder') startCreateFolderDraft();
+  });
+
+  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo, unlistenProgress, unlistenDone, unlistenDisksChanged, unlistenNewItem);
 }
 
 // Keys that have no meaning in a file manager but trigger browser defaults.
@@ -1083,7 +1136,6 @@ onMounted(async () => {
   window.addEventListener('wheel', onGridZoomWheel, { passive: false });
   window.addEventListener('keydown', blockBrowserShortcuts, { capture: true });
   window.addEventListener('keydown', onAppKeyDown);
-  window.addEventListener('click', onNewItemWindowClick, true);
   window.addEventListener('mousemove', onTitlebarMousemove);
   window.addEventListener('mouseup', onTitlebarMouseup);
   try {
@@ -1111,7 +1163,6 @@ onBeforeUnmount(async () => {
   window.removeEventListener('wheel', onGridZoomWheel);
   window.removeEventListener('keydown', blockBrowserShortcuts, { capture: true });
   window.removeEventListener('keydown', onAppKeyDown);
-  window.removeEventListener('click', onNewItemWindowClick, true);
   window.removeEventListener('mousemove', onTitlebarMousemove);
   window.removeEventListener('mouseup', onTitlebarMouseup);
   if (gridZoomSaveTimer) clearTimeout(gridZoomSaveTimer);

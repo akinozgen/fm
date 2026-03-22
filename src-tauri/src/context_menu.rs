@@ -2,6 +2,9 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Mutex;
 
+use crate::archive;
+use crate::disk_image;
+
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position};
 
@@ -80,11 +83,45 @@ fn build_app_bundle_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
   ]).map_err(|e| e.to_string())
 }
 
-fn build_file_menu(app: &AppHandle, is_text: bool) -> Result<Menu<tauri::Wry>, String> {
-  if is_text {
+fn build_disk_image_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
+  Menu::with_items(app, &[
+    &item(app, "open",       "Open")?,
+    &item(app, "mount",      "Mount")?,
+    &sep(app)?,
+    &item(app, "archive",    "Archive\u{2026}")?,
+    &sep(app)?,
+    &item(app, "rename",     "Rename")?,
+    &item(app, "copy",       "Copy")?,
+    &item(app, "cut",        "Cut")?,
+    &sep(app)?,
+    &item(app, "delete",     "Delete")?,
+    &sep(app)?,
+    &item(app, "properties", "Properties")?,
+  ]).map_err(|e| e.to_string())
+}
+
+fn build_file_menu(app: &AppHandle, is_text: bool, is_archive: bool) -> Result<Menu<tauri::Wry>, String> {
+  if is_archive {
+    Menu::with_items(app, &[
+      &item(app, "open",       "Open")?,
+      &item(app, "extract",    "Extract\u{2026}")?,
+      &sep(app)?,
+      &item(app, "archive",    "Archive\u{2026}")?,
+      &sep(app)?,
+      &item(app, "rename",     "Rename")?,
+      &item(app, "copy",       "Copy")?,
+      &item(app, "cut",        "Cut")?,
+      &sep(app)?,
+      &item(app, "delete",     "Delete")?,
+      &sep(app)?,
+      &item(app, "properties", "Properties")?,
+    ]).map_err(|e| e.to_string())
+  } else if is_text {
     Menu::with_items(app, &[
       &item(app, "open",       "Open")?,
       &item(app, "edit",       "Edit")?,
+      &sep(app)?,
+      &item(app, "archive",    "Archive\u{2026}")?,
       &sep(app)?,
       &item(app, "rename",     "Rename")?,
       &item(app, "copy",       "Copy")?,
@@ -97,6 +134,8 @@ fn build_file_menu(app: &AppHandle, is_text: bool) -> Result<Menu<tauri::Wry>, S
   } else {
     Menu::with_items(app, &[
       &item(app, "open",       "Open")?,
+      &sep(app)?,
+      &item(app, "archive",    "Archive\u{2026}")?,
       &sep(app)?,
       &item(app, "rename",     "Rename")?,
       &item(app, "copy",       "Copy")?,
@@ -115,6 +154,8 @@ fn build_files_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     &item(app, "copy",       "Copy")?,
     &item(app, "cut",        "Cut")?,
     &sep(app)?,
+    &item(app, "archive",    "Archive\u{2026}")?,
+    &sep(app)?,
     &item(app, "delete",     "Delete")?,
     &sep(app)?,
     &item(app, "properties", "Properties")?,
@@ -126,6 +167,8 @@ fn build_dir_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     &item(app, "open",             "Open")?,
     &sep(app)?,
     &item(app, "pin_to_favorites", "Pin to Favorites")?,
+    &sep(app)?,
+    &item(app, "archive",          "Archive\u{2026}")?,
     &sep(app)?,
     &item(app, "rename",           "Rename")?,
     &item(app, "copy",             "Copy")?,
@@ -144,6 +187,8 @@ fn build_dirs_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     &item(app, "copy",       "Copy")?,
     &item(app, "cut",        "Cut")?,
     &sep(app)?,
+    &item(app, "archive",    "Archive\u{2026}")?,
+    &sep(app)?,
     &item(app, "delete",     "Delete")?,
     &sep(app)?,
     &item(app, "properties", "Properties")?,
@@ -153,6 +198,8 @@ fn build_dirs_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
 // Mixed files + folders — only common actions
 fn build_mixed_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
   Menu::with_items(app, &[
+    &item(app, "archive",    "Archive\u{2026}")?,
+    &sep(app)?,
     &item(app, "delete",     "Delete")?,
     &sep(app)?,
     &item(app, "properties", "Properties")?,
@@ -195,10 +242,14 @@ pub fn show_file_context_menu_cmd(
     "empty" => build_empty_menu(&app)?,
     "file" if is_app_bundle.unwrap_or(false) => build_app_bundle_menu(&app)?,
     "file" => {
-      let is_text = paths.first()
-        .map(|p| is_likely_text(Path::new(p)))
-        .unwrap_or(false);
-      build_file_menu(&app, is_text)?
+      let is_disk_image = paths.first().map(|p| disk_image::is_disk_image(Path::new(p))).unwrap_or(false);
+      if is_disk_image {
+        build_disk_image_menu(&app)?
+      } else {
+        let is_text    = paths.first().map(|p| is_likely_text(Path::new(p))).unwrap_or(false);
+        let is_archive = paths.first().map(|p| archive::is_archive(Path::new(p))).unwrap_or(false);
+        build_file_menu(&app, is_text, is_archive)?
+      }
     }
     "files" => build_files_menu(&app)?,
     "dir"   => build_dir_menu(&app)?,

@@ -9,6 +9,8 @@ use std::time::UNIX_EPOCH;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, State, WebviewUrl, WebviewWindowBuilder};
 
+mod archive;
+mod disk_image;
 mod core;
 mod context_menu;
 mod dir_size;
@@ -32,6 +34,18 @@ struct AddressMenuState {
 }
 
 impl AddressMenuState {
+  fn new() -> Self {
+    Self {
+      menu: Mutex::new(None),
+    }
+  }
+}
+
+struct NewItemMenuState {
+  menu: Mutex<Option<Menu<tauri::Wry>>>,
+}
+
+impl NewItemMenuState {
   fn new() -> Self {
     Self {
       menu: Mutex::new(None),
@@ -78,6 +92,32 @@ impl EditorState {
       pending: Mutex::new(HashMap::new()),
       counter: AtomicU64::new(0),
       watchers: Mutex::new(HashMap::new()),
+    }
+  }
+}
+
+// ── Archive dialog state ──────────────────────────────────────────────────────
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct ArchiveDialogParams {
+  kind:           String,   // "extract" | "create"
+  paths:          Vec<String>,
+  dest_dir:       String,
+  selection_kind: String,   // "file"|"files"|"dir"|"dirs"|"mixed" (create only)
+}
+
+struct ArchiveState {
+  pending: Mutex<HashMap<String, ArchiveDialogParams>>,
+  counter: AtomicU64,
+  cancels: Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+impl ArchiveState {
+  fn new() -> Self {
+    Self {
+      pending: Mutex::new(HashMap::new()),
+      counter: AtomicU64::new(0),
+      cancels: Mutex::new(HashMap::new()),
     }
   }
 }
@@ -623,9 +663,75 @@ fn empty_trash_cmd() -> Result<u32, String> {
     return Err(errors.join("\n"));
   }
 
-  #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+  #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+  return Err("empty trash is not supported on this platform".to_string());
+
+  #[cfg(target_os = "macos")]
   {
-    Err("empty trash is not supported on this platform yet".to_string())
+    use std::fs;
+    let home = std::env::var("HOME").map_err(|e: std::env::VarError| e.to_string())?;
+    let trash_dir = std::path::Path::new(&home).join(".Trash");
+    if !trash_dir.exists() {
+      return Ok(0);
+    }
+    let mut count = 0u32;
+    let mut errors: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&trash_dir).map_err(|e: std::io::Error| e.to_string())? {
+      let entry: std::fs::DirEntry = entry.map_err(|e: std::io::Error| e.to_string())?;
+      let path = entry.path();
+      let result: Result<(), std::io::Error> = if path.is_dir() {
+        fs::remove_dir_all(&path)
+      } else {
+        fs::remove_file(&path)
+      };
+      match result {
+        Ok(_) => count += 1,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => errors.push(format!("{}: {}", path.display(), e)),
+      }
+    }
+    if errors.is_empty() {
+      Ok(count)
+    } else {
+      Err(errors.join("\n"))
+    }
+  }
+}
+
+#[tauri::command]
+fn mount_disk_image_cmd(path: String) -> Result<Option<String>, String> {
+  disk_image::mount(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn unmount_drive_cmd(path: String) -> Result<(), String> {
+  #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+  return Err("unmount not supported on this platform".to_string());
+
+  #[cfg(target_os = "macos")]
+  {
+    let output = std::process::Command::new("diskutil")
+      .args(["unmount", &path])
+      .output()
+      .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+      let msg = String::from_utf8_lossy(&output.stderr);
+      return Err(msg.trim().to_string());
+    }
+    Ok(())
+  }
+
+  #[cfg(target_os = "linux")]
+  {
+    let output = std::process::Command::new("umount")
+      .arg(&path)
+      .output()
+      .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+      let msg = String::from_utf8_lossy(&output.stderr);
+      return Err(msg.trim().to_string());
+    }
+    Ok(())
   }
 }
 
@@ -696,6 +802,22 @@ fn show_address_menu_cmd(
 }
 
 #[tauri::command]
+fn show_new_item_menu_cmd(
+  window: tauri::Window,
+  state: State<'_, NewItemMenuState>,
+  x: f64,
+  y: f64,
+) -> Result<(), String> {
+  let menu_guard = state.menu.lock().unwrap();
+  let Some(menu) = menu_guard.as_ref() else {
+    return Err("menu not initialized".to_string());
+  };
+  window
+    .popup_menu_at(menu, Position::Logical(LogicalPosition::new(x, y)))
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn read_text_file_cmd(path: String) -> Result<String, String> {
   let path_buf = PathBuf::from(&path);
   if !path_buf.is_file() {
@@ -753,7 +875,7 @@ fn open_editor_cmd(
     .min_inner_size(500.0, 400.0);
 
   #[cfg(target_os = "macos")]
-  let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+  let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).title("");
 
   #[cfg(not(target_os = "macos"))]
   let builder = builder.decorations(false);
@@ -807,6 +929,236 @@ fn unwatch_editor_file_cmd(state: State<'_, EditorState>, label: String) -> Resu
   Ok(())
 }
 
+// ── Archive dialog commands ───────────────────────────────────────────────────
+
+#[tauri::command]
+fn open_extract_dialog_cmd(
+  app: AppHandle,
+  state: State<'_, ArchiveState>,
+  path: String,
+) -> Result<(), String> {
+  let path_buf = std::path::PathBuf::from(&path);
+  if !path_buf.is_file() {
+    return Err("file does not exist".to_string());
+  }
+  let filename = path_buf
+    .file_name()
+    .and_then(|n| n.to_str())
+    .unwrap_or("archive")
+    .to_string();
+  let dest_dir = path_buf
+    .parent()
+    .map(|p| p.to_string_lossy().into_owned())
+    .unwrap_or_default();
+
+  let count = state.counter.fetch_add(1, Ordering::SeqCst);
+  let label = format!("archive-{count}");
+
+  state.pending.lock().unwrap().insert(
+    label.clone(),
+    ArchiveDialogParams {
+      kind:           "extract".to_string(),
+      paths:          vec![path],
+      dest_dir,
+      selection_kind: "file".to_string(),
+    },
+  );
+
+  let builder = WebviewWindowBuilder::new(
+    &app,
+    &label,
+    WebviewUrl::App("archive.html".into()),
+  )
+  .title(format!("Extract \u{2013} {filename}"))
+  .inner_size(520.0, 360.0)
+  .min_inner_size(460.0, 300.0)
+  .resizable(true);
+
+  #[cfg(target_os = "macos")]
+  let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).title("");
+  #[cfg(not(target_os = "macos"))]
+  let builder = builder.decorations(false);
+
+  builder.build().map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+fn open_archive_dialog_cmd(
+  app: AppHandle,
+  state: State<'_, ArchiveState>,
+  paths: Vec<String>,
+  dest_dir: String,
+  selection_kind: String,
+) -> Result<(), String> {
+  if paths.is_empty() {
+    return Err("no paths provided".to_string());
+  }
+  let count = state.counter.fetch_add(1, Ordering::SeqCst);
+  let label = format!("archive-{count}");
+
+  state.pending.lock().unwrap().insert(
+    label.clone(),
+    ArchiveDialogParams {
+      kind:           "create".to_string(),
+      paths,
+      dest_dir,
+      selection_kind,
+    },
+  );
+
+  let builder = WebviewWindowBuilder::new(
+    &app,
+    &label,
+    WebviewUrl::App("archive.html".into()),
+  )
+  .title("Create Archive")
+  .inner_size(560.0, 460.0)
+  .min_inner_size(480.0, 360.0)
+  .resizable(true);
+
+  #[cfg(target_os = "macos")]
+  let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).title("");
+  #[cfg(not(target_os = "macos"))]
+  let builder = builder.decorations(false);
+
+  builder.build().map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+fn get_archive_dialog_params_cmd(
+  state: State<'_, ArchiveState>,
+  label: String,
+) -> Result<ArchiveDialogParams, String> {
+  state
+    .pending
+    .lock()
+    .unwrap()
+    .remove(&label)
+    .ok_or_else(|| "no pending params for this archive window".to_string())
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ArchiveProgressEvent {
+  done:    u64,
+  total:   u64,
+  current: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ArchiveDoneEvent {
+  ok:          bool,
+  error:       Option<String>,
+  output_path: Option<String>,
+  count:       u64,
+}
+
+/// Archive runner — receives all parameters from the frontend.
+#[tauri::command]
+async fn run_archive_cmd(
+  app: AppHandle,
+  state: State<'_, ArchiveState>,
+  label: String,
+  source_paths: Vec<String>,
+  dest: String,
+  overwrite: bool,
+  format: String,
+  subfolder: bool,
+) -> Result<(), String> {
+  let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+  state.cancels.lock().unwrap().insert(label.clone(), cancel.clone());
+
+  let win = app.get_webview_window(&label).ok_or("window not found")?;
+  let win2 = win.clone();
+
+  let is_extract = format == "extract";
+
+  tokio::task::spawn_blocking(move || {
+    let emit_progress = {
+      let win = win.clone();
+      move |done: u64, total: u64, current: &str| {
+        let _ = win.emit("fm://archive-progress", ArchiveProgressEvent {
+          done, total, current: current.to_string(),
+        });
+      }
+    };
+
+    let result: Result<(u64, Option<String>), String> = if is_extract {
+      let src = std::path::PathBuf::from(&source_paths[0]);
+      let base_dest = std::path::PathBuf::from(&dest);
+      let final_dest = if subfolder {
+        // Strip compound extensions for subfolder name
+        let stem = archive_stem(&src);
+        base_dest.join(stem)
+      } else {
+        base_dest
+      };
+      archive::extract(&src, &final_dest, overwrite, cancel, emit_progress)
+        .map(|_| (0u64, Some(final_dest.to_string_lossy().into_owned())))
+    } else {
+      let src_paths: Vec<std::path::PathBuf> = source_paths
+        .iter()
+        .map(|p| std::path::PathBuf::from(p))
+        .collect();
+      let output = std::path::PathBuf::from(&dest);
+      let count = src_paths.len() as u64;
+      archive::create(&src_paths, &output, &format, cancel, emit_progress)
+        .map(|_| (count, Some(output.to_string_lossy().into_owned())))
+    };
+
+    match result {
+      Ok((count, output_path)) => {
+        let _ = win2.emit("fm://archive-done", ArchiveDoneEvent {
+          ok: true,
+          error: None,
+          output_path,
+          count,
+        });
+      }
+      Err(e) if e == "cancelled" => {
+        let _ = win2.emit("fm://archive-done", ArchiveDoneEvent {
+          ok: false,
+          error: Some("cancelled".to_string()),
+          output_path: None,
+          count: 0,
+        });
+      }
+      Err(e) => {
+        let _ = win2.emit("fm://archive-done", ArchiveDoneEvent {
+          ok: false,
+          error: Some(e),
+          output_path: None,
+          count: 0,
+        });
+      }
+    }
+  });
+  Ok(())
+}
+
+#[tauri::command]
+fn cancel_archive_cmd(state: State<'_, ArchiveState>, label: String) -> Result<(), String> {
+  if let Some(cancel) = state.cancels.lock().unwrap().get(&label) {
+    cancel.store(true, Ordering::Relaxed);
+  }
+  Ok(())
+}
+
+fn archive_stem(path: &std::path::Path) -> String {
+  let name = path
+    .file_name()
+    .and_then(|n| n.to_str())
+    .unwrap_or("archive")
+    .to_lowercase();
+  for ext in &[".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".tar", ".zip"] {
+    if let Some(stem) = name.strip_suffix(*ext) {
+      return stem.to_string();
+    }
+  }
+  name
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let storage_paths = bootstrap_storage().expect("failed to bootstrap storage");
@@ -814,6 +1166,7 @@ pub fn run() {
   tauri::Builder::default()
     .manage(Arc::new(FileCoreState::new()))
     .manage(AddressMenuState::new())
+    .manage(NewItemMenuState::new())
     .manage(DirWatchState::new())
     .manage(StorageState::new(storage_paths))
     .manage(ThumbnailState::new())
@@ -821,6 +1174,7 @@ pub fn run() {
     .manage(ContextMenuState::new())
     .manage(transfer::TransferState::new())
     .manage(EditorState::new())
+    .manage(ArchiveState::new())
     .invoke_handler(tauri::generate_handler![
       read_dir_cmd,
       walk_dir_cmd,
@@ -844,9 +1198,12 @@ pub fn run() {
       delete_paths_cmd,
       list_trash_entries_cmd,
       empty_trash_cmd,
+      mount_disk_image_cmd,
+      unmount_drive_cmd,
       start_dir_watch_cmd,
       stop_dir_watch_cmd,
       show_address_menu_cmd,
+      show_new_item_menu_cmd,
       show_file_context_menu_cmd,
       compute_dir_size_cmd,
       cancel_dir_size_cmd,
@@ -860,6 +1217,11 @@ pub fn run() {
       get_editor_path_cmd,
       watch_editor_file_cmd,
       unwatch_editor_file_cmd,
+      open_extract_dialog_cmd,
+      open_archive_dialog_cmd,
+      get_archive_dialog_params_cmd,
+      run_archive_cmd,
+      cancel_archive_cmd,
     ])
     .setup(|app| {
       // Create main window programmatically so we can apply platform-specific titlebar settings.
@@ -874,7 +1236,7 @@ pub fn run() {
           .resizable(true);
 
         #[cfg(target_os = "macos")]
-        let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+        let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).title("");
 
         #[cfg(not(target_os = "macos"))]
         let builder = builder.decorations(false);
@@ -892,6 +1254,13 @@ pub fn run() {
         *guard = Some(menu);
       }
 
+      let new_file_item   = MenuItem::with_id(handle, "new.file",   "New File",   true, None::<&str>)?;
+      let new_folder_item = MenuItem::with_id(handle, "new.folder", "New Folder", true, None::<&str>)?;
+      let new_menu = Menu::with_items(handle, &[&new_file_item, &new_folder_item])?;
+      if let Some(state) = app.try_state::<NewItemMenuState>() {
+        *state.menu.lock().unwrap() = Some(new_menu);
+      }
+
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
@@ -903,6 +1272,35 @@ pub fn run() {
       app.handle().plugin(tauri_plugin_clipboard_manager::init())?;
       app.handle().plugin(tauri_plugin_dialog::init())?;
       app.handle().plugin(tauri_plugin_store::Builder::default().build())?;
+
+      // Watch for OS-level disk mount/unmount events by polling every 2 seconds.
+      {
+        let handle = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+          fn current_mounts() -> Vec<String> {
+            let disks = sysinfo::Disks::new_with_refreshed_list();
+            let mut mounts: Vec<String> = disks
+              .list()
+              .iter()
+              .map(|d| d.mount_point().to_string_lossy().into_owned())
+              .collect();
+            mounts.sort();
+            mounts
+          }
+          let mut prev = current_mounts();
+          loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            let now = current_mounts();
+            if now != prev {
+              prev = now;
+              if let Some(win) = handle.get_webview_window("main") {
+                let _ = win.emit("fm://disks-changed", ());
+              }
+            }
+          }
+        });
+      }
+
       Ok(())
     })
     .on_menu_event(|app, event| {
@@ -911,6 +1309,10 @@ pub fn run() {
         let _ = app.emit("fm://address-menu", "copy");
       } else if id == "address.clear" {
         let _ = app.emit("fm://address-menu", "clear");
+      } else if id == "new.file" {
+        let _ = app.emit("fm://new-item-menu", "file");
+      } else if id == "new.folder" {
+        let _ = app.emit("fm://new-item-menu", "folder");
       } else if id.starts_with("context.") {
         context_menu::handle_menu_event(app, id);
       }
