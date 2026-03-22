@@ -15,9 +15,10 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        main:    './index.html',
-        editor:  './editor.html',
-        archive: './archive.html',
+        main:      './index.html',
+        editor:    './editor.html',
+        archive:   './archive.html',
+        quicklook: './quicklook.html',
       }
     }
   }

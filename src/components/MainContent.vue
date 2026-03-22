@@ -168,7 +168,7 @@ const gridStyle = computed(() => ({
   '--grid-icon-size': `${gridIconSize.value}px`
 }));
 
-const emit = defineEmits(['open-dir', 'open-file', 'selection-change', 'remove-draft', 'show-properties']);
+const emit = defineEmits(['open-dir', 'open-file', 'selection-change', 'remove-draft', 'show-properties', 'quicklook', 'cursor-changed']);
 const selectedPaths = ref(new Set());
 const anchorIndex = ref(null);
 const cursorIndex = ref(-1);
@@ -254,6 +254,7 @@ function handleItemClick(entry, index, event) {
 
   selectedPaths.value = new Set([entry.path]);
   anchorIndex.value = index;
+  emit('cursor-changed', entry.path);
 }
 
 function toggleCheckbox(path, index) {
@@ -770,6 +771,8 @@ function onWindowKeyDown(event) {
 
     if (!event.ctrlKey) {
       selectByIndex(targetIndex);
+      const movedEntry = entries.value[targetIndex];
+      if (movedEntry) emit('cursor-changed', movedEntry.path);
       event.preventDefault();
       return;
     }
@@ -787,6 +790,15 @@ function onWindowKeyDown(event) {
     cursorIndex.value = index;
     scrollItemIntoView(entry.path);
     event.preventDefault();
+    return;
+  }
+
+  if (event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey &&
+      (event.key === ' ' || event.code === 'Space')) {
+    event.preventDefault();
+    const index = getKeyboardCursorIndex();
+    const entry = entries.value[index];
+    if (entry && !entry.is_draft) emit('quicklook', entry.path);
     return;
   }
 

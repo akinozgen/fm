@@ -123,6 +123,170 @@ impl ArchiveState {
   }
 }
 
+// ── Quick Look state ──────────────────────────────────────────────────────────
+struct QuickLookState {
+  path: Mutex<String>,
+}
+
+impl QuickLookState {
+  fn new() -> Self {
+    Self { path: Mutex::new(String::new()) }
+  }
+}
+
+// ── Quick Look: rich file metadata ────────────────────────────────────────────
+#[derive(serde::Serialize)]
+struct FileMetadata {
+  path:         String,
+  name:         String,
+  ext:          Option<String>,
+  size:         Option<u64>,
+  modified_ms:  Option<u128>,
+  created_ms:   Option<u128>,
+  is_dir:       bool,
+  image_width:  Option<u32>,
+  image_height: Option<u32>,
+  line_count:   Option<u64>,
+  mime_type:    String,
+}
+
+fn ext_to_mime(ext: &str) -> &'static str {
+  match ext {
+    "png"                         => "image/png",
+    "jpg" | "jpeg"                => "image/jpeg",
+    "gif"                         => "image/gif",
+    "webp"                        => "image/webp",
+    "bmp"                         => "image/bmp",
+    "avif"                        => "image/avif",
+    "tiff" | "tif"                => "image/tiff",
+    "ico"                         => "image/x-icon",
+    "svg"                         => "image/svg+xml",
+    "qoi"                         => "image/qoi",
+    "pdf"                         => "application/pdf",
+    "txt" | "md" | "markdown"     => "text/plain",
+    "rs"                          => "text/x-rust",
+    "js" | "mjs" | "cjs"         => "text/javascript",
+    "ts"                          => "text/typescript",
+    "jsx" | "tsx"                 => "text/jsx",
+    "vue"                         => "text/x-vue",
+    "html" | "htm"                => "text/html",
+    "css" | "scss" | "sass"       => "text/css",
+    "json"                        => "application/json",
+    "toml"                        => "text/x-toml",
+    "yaml" | "yml"                => "text/yaml",
+    "xml"                         => "text/xml",
+    "sh" | "bash" | "zsh"         => "text/x-shellscript",
+    "py"                          => "text/x-python",
+    "rb"                          => "text/x-ruby",
+    "go"                          => "text/x-go",
+    "java"                        => "text/x-java",
+    "c" | "h"                     => "text/x-c",
+    "cpp" | "cc" | "cxx" | "hpp"  => "text/x-c++",
+    "swift"                       => "text/x-swift",
+    "kt" | "kts"                  => "text/x-kotlin",
+    "cs"                          => "text/x-csharp",
+    "php"                         => "text/x-php",
+    _                             => "application/octet-stream",
+  }
+}
+
+const IMAGE_EXTS: &[&str] = &[
+  "jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "tiff", "tif", "ico", "qoi",
+];
+
+const TEXT_EXTS: &[&str] = &[
+  "txt", "md", "markdown", "rs", "js", "mjs", "cjs", "ts", "jsx", "tsx", "vue",
+  "html", "htm", "css", "scss", "sass", "json", "toml", "yaml", "yml", "xml",
+  "sh", "bash", "zsh", "py", "rb", "go", "java", "c", "h", "cpp", "cc", "cxx",
+  "hpp", "swift", "kt", "kts", "cs", "php", "lua", "r", "sql", "gitignore",
+  "env", "dockerfile", "makefile", "cmake",
+];
+
+#[tauri::command]
+fn get_file_metadata_cmd(path: String) -> Result<FileMetadata, String> {
+  let p = std::path::Path::new(&path);
+  let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+  let ext  = p.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase());
+  let ext_str = ext.as_deref().unwrap_or("");
+  let mime_type = ext_to_mime(ext_str).to_string();
+
+  let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+  let is_dir = meta.is_dir();
+  let size   = if is_dir { None } else { Some(meta.len()) };
+
+  let modified_ms = meta.modified().ok()
+    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+    .map(|d| d.as_millis());
+  let created_ms = meta.created().ok()
+    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+    .map(|d| d.as_millis());
+
+  // Image dimensions — fast header-only read
+  let (image_width, image_height) = if IMAGE_EXTS.contains(&ext_str) {
+    match image::ImageReader::open(&path)
+      .ok()
+      .and_then(|r| r.with_guessed_format().ok())
+      .and_then(|r| r.into_dimensions().ok())
+    {
+      Some((w, h)) => (Some(w), Some(h)),
+      None => (None, None),
+    }
+  } else {
+    (None, None)
+  };
+
+  // Line count — read up to 1 MiB, count newlines
+  let line_count = if TEXT_EXTS.contains(&ext_str) || TEXT_EXTS.iter().any(|e| *e == ext_str) {
+    use std::io::Read;
+    std::fs::File::open(&path).ok().map(|mut f| {
+      let mut buf = vec![0u8; 1 << 20]; // 1 MiB
+      let n = f.read(&mut buf).unwrap_or(0);
+      buf[..n].iter().filter(|&&b| b == b'\n').count() as u64 + if n > 0 { 1 } else { 0 }
+    })
+  } else {
+    None
+  };
+
+  Ok(FileMetadata { path, name, ext, size, modified_ms, created_ms, is_dir,
+                    image_width, image_height, line_count, mime_type })
+}
+
+#[tauri::command]
+fn open_quicklook_cmd(
+  app: AppHandle,
+  state: State<'_, QuickLookState>,
+  path: String,
+) -> Result<(), String> {
+  *state.path.lock().unwrap() = path.clone();
+
+  // If window already exists, update it and bring it to front
+  if let Some(win) = app.get_webview_window("quicklook") {
+    let _ = win.emit("fm://quicklook-navigate", &path);
+    let _ = win.set_focus();
+    return Ok(());
+  }
+
+  let builder = WebviewWindowBuilder::new(&app, "quicklook", WebviewUrl::App("quicklook.html".into()))
+    .title("")
+    .inner_size(480.0, 640.0)
+    .min_inner_size(360.0, 480.0)
+    .resizable(true);
+
+  #[cfg(target_os = "macos")]
+  let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).title("");
+
+  #[cfg(not(target_os = "macos"))]
+  let builder = builder.decorations(false);
+
+  builder.build().map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+fn get_quicklook_path_cmd(state: State<'_, QuickLookState>) -> Result<String, String> {
+  Ok(state.path.lock().unwrap().clone())
+}
+
 // ── App menu dynamic path store ───────────────────────────────────────────────
 struct MenuPathStore {
   vol_paths:     Mutex<Vec<String>>,
@@ -1365,6 +1529,7 @@ pub fn run() {
     .manage(transfer::TransferState::new())
     .manage(EditorState::new())
     .manage(ArchiveState::new())
+    .manage(QuickLookState::new())
     .manage(MenuPathStore::new())
     .invoke_handler(tauri::generate_handler![
       read_dir_cmd,
@@ -1414,6 +1579,9 @@ pub fn run() {
       run_archive_cmd,
       cancel_archive_cmd,
       rebuild_app_menu_cmd,
+      get_file_metadata_cmd,
+      open_quicklook_cmd,
+      get_quicklook_path_cmd,
     ])
     .setup(|app| {
       // Create main window programmatically so we can apply platform-specific titlebar settings.

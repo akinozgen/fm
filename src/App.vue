@@ -128,6 +128,8 @@
         @selection-change="onSelectionChange"
         @remove-draft="removeDraftEntry"
         @show-properties="onShowProperties"
+        @quicklook="onQuicklook"
+        @cursor-changed="onCursorChanged"
       />
       <StatusBar
         :shown-count="sortedEntries.length"
@@ -143,7 +145,7 @@
 
 <script setup>
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { listen, emit } from '@tauri-apps/api/event';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ActionToolbar from './components/ActionToolbar.vue';
@@ -210,6 +212,7 @@ const selectedPaths = ref([]);
 const clipboardPaths   = ref([]);
 const clipboardOp      = ref('');  // 'cut' | 'copy' | ''
 const transferJobs     = ref([]);  // { id, op, done, total, bytes_done, bytes_total, current, paused }[]
+const quicklookOpen    = ref(false);
 
 const pathHistory = ref([]);
 const historyIndex = ref(-1);
@@ -897,6 +900,15 @@ async function rebuildAppMenu() {
       has_clipboard:   clipboardPaths.value.length > 0,
     }});
   } catch { /* non-macOS or early init */ }
+}
+
+async function onQuicklook(path) {
+  await invoke('open_quicklook_cmd', { path });
+  quicklookOpen.value = true;
+}
+
+function onCursorChanged(path) {
+  if (path) emit('fm://quicklook-navigate', path);
 }
 
 async function hookEvents() {

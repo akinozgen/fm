@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "enables the default permissions",
-  "windows": ["main", "editor-*", "archive-*"],
+  "windows": ["main", "editor-*", "archive-*", "quicklook"],
   "permissions": [
     "core:default",
     "store:default",

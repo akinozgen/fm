@@ -58,7 +58,7 @@ npm run dev
 
 ## Credits
 
-- App icon: [Folder icons created by cahiwak - Flaticon](https://www.flaticon.com/free-icons/folder)
+- App icon: [Open folder icons created by kmg design - Flaticon](https://www.flaticon.com/free-icons/open-folder)
 
 ## License
 
