@@ -50,6 +50,69 @@
           </div>
         </div>
 
+        <!-- Video -->
+        <div v-else-if="previewType === 'video'" class="ql-media-wrap">
+          <video
+            ref="videoEl"
+            class="ql-video"
+            :src="mediaUrl"
+            preload="metadata"
+            autoplay
+            muted
+            playsinline
+            @timeupdate="onTimeUpdate"
+            @play="onMediaPlay"
+            @pause="onMediaPause"
+          />
+          <div class="ql-media-controls">
+            <button class="ql-play-btn" @click="togglePlay(videoEl)">
+              {{ mediaEnded ? '↺' : mediaPaused ? '▶' : '⏸' }}
+            </button>
+            <div class="ql-progress-track" @click="seekClick($event, videoEl)">
+              <div class="ql-progress-fill" :style="{ width: mediaProgress + '%' }" />
+            </div>
+            <span class="ql-time">{{ fmtTime(mediaTime) }} / 0:30</span>
+            <span v-if="mediaEnded" class="ql-preview-badge">preview</span>
+          </div>
+        </div>
+
+        <!-- Audio -->
+        <div v-else-if="previewType === 'audio'" class="ql-audio-wrap">
+          <div class="ql-artwork-area">
+            <img
+              v-if="audioMeta?.artwork_base64"
+              class="ql-artwork"
+              :src="`data:${audioMeta.artwork_mime};base64,${audioMeta.artwork_base64}`"
+              alt=""
+            />
+            <div v-else class="ql-artwork-placeholder">
+              <FileIcon :path="metadata.path" :is-dir="false" :size="72" />
+            </div>
+            <div v-if="audioMeta?.title" class="ql-track-info">
+              <span class="ql-track-title">{{ audioMeta.title }}</span>
+              <span v-if="audioMeta?.artist" class="ql-track-artist">{{ audioMeta.artist }}</span>
+            </div>
+          </div>
+          <audio
+            ref="audioEl"
+            :src="mediaUrl"
+            preload="metadata"
+            @timeupdate="onTimeUpdate"
+            @play="onMediaPlay"
+            @pause="onMediaPause"
+          />
+          <div class="ql-media-controls">
+            <button class="ql-play-btn" @click="togglePlay(audioEl)">
+              {{ mediaEnded ? '↺' : mediaPaused ? '▶' : '⏸' }}
+            </button>
+            <div class="ql-progress-track" @click="seekClick($event, audioEl)">
+              <div class="ql-progress-fill" :style="{ width: mediaProgress + '%' }" />
+            </div>
+            <span class="ql-time">{{ fmtTime(mediaTime) }} / 0:30</span>
+            <span v-if="mediaEnded" class="ql-preview-badge">preview</span>
+          </div>
+        </div>
+
         <!-- Generic icon fallback -->
         <div v-else class="ql-icon-wrap">
           <FileIcon :path="metadata.path" :is-dir="metadata.is_dir" :size="72" />
@@ -86,6 +149,11 @@
             <span class="ql-label">Lines</span>
             <span class="ql-value">{{ metadata.line_count.toLocaleString() }}</span>
           </template>
+
+          <template v-if="audioMeta?.duration_secs != null">
+            <span class="ql-label">Duration</span>
+            <span class="ql-value">{{ fmtTime(audioMeta.duration_secs) }}</span>
+          </template>
         </div>
       </div>
     </template>
@@ -94,7 +162,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { EditorView } from '@codemirror/view';
@@ -108,13 +176,21 @@ const isMac = navigator.platform.toUpperCase().includes('MAC');
 const PREVIEW_LINE_LIMIT = 300;
 
 const editorContainer  = ref(null);
+const videoEl          = ref(null);
+const audioEl          = ref(null);
 const metadata         = ref(null);
 const loading          = ref(true);
 const loadError        = ref('');
 const previewSrc       = ref('');
-const previewType      = ref('none'); // 'image' | 'rich' | 'text' | 'none'
+const previewType      = ref('none'); // 'image' | 'rich' | 'text' | 'video' | 'audio' | 'none'
 const renderedHtml     = ref('');
 const previewTruncated = ref(false);
+const mediaUrl         = ref('');
+const mediaPaused      = ref(true);
+const mediaEnded       = ref(false);
+const mediaProgress    = ref(0);
+const mediaTime        = ref(0);
+const audioMeta        = ref(null);
 
 let editorView  = null;
 let unlistenNav = null;
@@ -126,11 +202,15 @@ const TEXT_EXTS  = new Set(['txt','rs','js','mjs','cjs','ts','jsx','tsx','vue',
   'css','scss','sass','json','toml','yaml','yml','xml','sh','bash','zsh',
   'py','rb','go','java','c','h','cpp','cc','cxx','hpp','swift','kt','kts','cs','php',
   'lua','r','sql','gitignore','env','dockerfile','makefile','cmake']);
+const VIDEO_EXTS = new Set(['mp4','m4v','mov','webm']);
+const AUDIO_EXTS = new Set(['mp3','m4a','aac','wav','ogg','flac','opus']);
 
 function getPreviewType(ext) {
   if (!ext) return 'none';
   const e = ext.toLowerCase();
   if (IMAGE_EXTS.has(e)) return 'image';
+  if (VIDEO_EXTS.has(e)) return 'video';
+  if (AUDIO_EXTS.has(e)) return 'audio';
   if (RICH_EXTS.has(e))  return 'rich';
   if (TEXT_EXTS.has(e))  return 'text';
   return 'none';
@@ -140,14 +220,18 @@ const previewClass = computed(() => ({
   'ql-preview--image': previewType.value === 'image',
   'ql-preview--rich':  previewType.value === 'rich',
   'ql-preview--text':  previewType.value === 'text',
+  'ql-preview--video': previewType.value === 'video',
+  'ql-preview--audio': previewType.value === 'audio',
   'ql-preview--icon':  previewType.value === 'none',
 }));
 
 const kindLabel = computed(() => {
   if (!metadata.value) return '';
   if (metadata.value.is_dir) return 'Folder';
-  const ext = metadata.value.ext;
+  const ext = metadata.value.ext?.toLowerCase();
   if (!ext) return 'File';
+  if (VIDEO_EXTS.has(ext)) return `${ext.toUpperCase()} Video`;
+  if (AUDIO_EXTS.has(ext)) return `${ext.toUpperCase()} Audio`;
   const mime = metadata.value.mime_type;
   if (mime.startsWith('image/')) return `${ext.toUpperCase()} Image`;
   if (mime.startsWith('text/'))  return `${ext.toUpperCase()} File`;
@@ -238,6 +322,14 @@ async function loadPreview(path) {
   previewTruncated.value = false;
   previewType.value = 'none';
   metadata.value = null;
+  mediaUrl.value = '';
+  mediaPaused.value = true;
+  mediaEnded.value = false;
+  mediaProgress.value = 0;
+  mediaTime.value = 0;
+  audioMeta.value = null;
+  videoEl.value?.pause();
+  audioEl.value?.pause();
   if (editorView) { editorView.destroy(); editorView = null; }
 
   // 1. Fetch metadata — show it as soon as possible
@@ -280,6 +372,15 @@ async function loadPreview(path) {
       content = lines.slice(0, PREVIEW_LINE_LIMIT).join('\n');
     }
     initOrUpdateEditor(path, content);
+
+  } else if (previewType.value === 'video') {
+    mediaUrl.value = convertFileSrc(path);
+
+  } else if (previewType.value === 'audio') {
+    mediaUrl.value = convertFileSrc(path);
+    try {
+      audioMeta.value = await invoke('get_audio_metadata_cmd', { path });
+    } catch { audioMeta.value = null; }
   }
 }
 
@@ -307,6 +408,44 @@ function initOrUpdateEditor(path, content) {
   detectLanguage(path).then(({ extension }) => {
     editorView.dispatch({ effects: languageCompartment.reconfigure(extension) });
   });
+}
+
+// ── Media player ──────────────────────────────────────────────────────────────
+function fmtTime(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60).toString().padStart(2, '0');
+  return `${m}:${sec}`;
+}
+
+function onTimeUpdate(e) {
+  const t = e.target.currentTime;
+  mediaTime.value = t;
+  mediaProgress.value = Math.min((t / 30) * 100, 100);
+  if (t >= 30) {
+    e.target.pause();
+    mediaEnded.value = true;
+    mediaPaused.value = true;
+  }
+}
+
+function onMediaPlay()  { mediaPaused.value = false; }
+function onMediaPause() { mediaPaused.value = true; }
+
+function togglePlay(el) {
+  if (!el) return;
+  if (mediaEnded.value) {
+    el.currentTime = 0;
+    mediaEnded.value = false;
+    mediaProgress.value = 0;
+  }
+  mediaPaused.value ? el.play() : el.pause();
+}
+
+function seekClick(e, el) {
+  if (!el) return;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct = (e.clientX - rect.left) / rect.width;
+  el.currentTime = Math.min(pct * 30, 30);
 }
 
 // ── Titlebar drag ──────────────────────────────────────────────────────────────
@@ -338,6 +477,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown);
   unlistenNav?.();
   editorView?.destroy();
+  videoEl.value?.pause();
+  audioEl.value?.pause();
 });
 </script>
 
@@ -400,8 +541,11 @@ onBeforeUnmount(() => {
 }
 
 .ql-preview--text,
-.ql-preview--rich {
+.ql-preview--rich,
+.ql-preview--video,
+.ql-preview--audio {
   align-items: stretch;
+  flex-direction: column;
 }
 
 .ql-image-wrap {
@@ -466,6 +610,135 @@ onBeforeUnmount(() => {
   padding: 4px 8px;
   background: var(--panel-muted, #f2f2f4);
   border-top: 1px solid var(--line);
+}
+
+/* ── Media player ── */
+.ql-media-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ql-video {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+
+.ql-audio-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ql-artwork-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  min-height: 0;
+}
+
+.ql-artwork {
+  max-height: 160px;
+  max-width: 160px;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  object-fit: cover;
+}
+
+.ql-artwork-placeholder {
+  opacity: 0.4;
+}
+
+.ql-track-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.ql-track-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.ql-track-artist {
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ql-media-controls {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.ql-play-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ql-progress-track {
+  flex: 1;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+}
+
+.ql-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.1s linear;
+}
+
+.ql-time {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ql-preview-badge {
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--panel-muted, #f2f2f4);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
 }
 
 /* ── Metadata ── */

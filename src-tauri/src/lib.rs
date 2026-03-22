@@ -186,6 +186,15 @@ fn ext_to_mime(ext: &str) -> &'static str {
     "kt" | "kts"                  => "text/x-kotlin",
     "cs"                          => "text/x-csharp",
     "php"                         => "text/x-php",
+    "mp4" | "m4v"                 => "video/mp4",
+    "mov"                         => "video/quicktime",
+    "webm"                        => "video/webm",
+    "mp3"                         => "audio/mpeg",
+    "m4a" | "aac"                 => "audio/mp4",
+    "wav"                         => "audio/wav",
+    "ogg"                         => "audio/ogg",
+    "flac"                        => "audio/flac",
+    "opus"                        => "audio/ogg; codecs=opus",
     _                             => "application/octet-stream",
   }
 }
@@ -285,6 +294,55 @@ fn open_quicklook_cmd(
 #[tauri::command]
 fn get_quicklook_path_cmd(state: State<'_, QuickLookState>) -> Result<String, String> {
   Ok(state.path.lock().unwrap().clone())
+}
+
+// ── Audio metadata (album art, tags, duration) ────────────────────────────────
+#[derive(serde::Serialize)]
+struct AudioMetadata {
+  title:          Option<String>,
+  artist:         Option<String>,
+  album:          Option<String>,
+  duration_secs:  Option<f64>,
+  artwork_base64: Option<String>,
+  artwork_mime:   Option<String>,
+}
+
+#[tauri::command]
+fn get_audio_metadata_cmd(path: String) -> Result<AudioMetadata, String> {
+  use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
+  use lofty::probe::Probe;
+
+  let tagged = Probe::open(&path)
+    .map_err(|e| e.to_string())?
+    .guess_file_type()
+    .map_err(|e| e.to_string())?
+    .read()
+    .map_err(|e| e.to_string())?;
+
+  let duration_secs = Some(tagged.properties().duration().as_secs_f64());
+
+  let tag = tagged.primary_tag();
+  let (title, artist, album, artwork_base64, artwork_mime) = if let Some(tag) = tag {
+    let title  = tag.title().map(|s| s.to_string());
+    let artist = tag.artist().map(|s| s.to_string());
+    let album  = tag.album().map(|s| s.to_string());
+
+    let (art_b64, art_mime) = tag.pictures().first().map(|pic| {
+      use base64::Engine;
+      let b64 = base64::engine::general_purpose::STANDARD.encode(pic.data());
+      let mime = match pic.mime_type() {
+        Some(lofty::picture::MimeType::Png)  => "image/png".to_string(),
+        _                                     => "image/jpeg".to_string(),
+      };
+      (b64, mime)
+    }).map(|(b, m)| (Some(b), Some(m))).unwrap_or((None, None));
+
+    (title, artist, album, art_b64, art_mime)
+  } else {
+    (None, None, None, None, None)
+  };
+
+  Ok(AudioMetadata { title, artist, album, duration_secs, artwork_base64, artwork_mime })
 }
 
 // ── App menu dynamic path store ───────────────────────────────────────────────
@@ -1582,6 +1640,7 @@ pub fn run() {
       get_file_metadata_cmd,
       open_quicklook_cmd,
       get_quicklook_path_cmd,
+      get_audio_metadata_cmd,
     ])
     .setup(|app| {
       // Create main window programmatically so we can apply platform-specific titlebar settings.
