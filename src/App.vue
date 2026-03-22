@@ -10,7 +10,7 @@
       <div class="titlebar-center">
         <div class="titlebar-path-wrap">
           <span class="titlebar-path" :title="currentPath">{{ titleBarLocationLabel }}</span>
-          <button type="button" class="titlebar-path-search" title="Search path (F6)" @click="focusAddressBar">
+          <button type="button" class="titlebar-path-search" title="Search (F6)" @click="navigateTo(FM_SEARCH)">
             <Search :size="14" />
           </button>
         </div>
@@ -45,6 +45,8 @@
         :folder-entries="entries"
         :manual-history="manualPathHistory"
         :transfer-jobs="transferJobs"
+        :indexing="indexing"
+        :index-done="indexDone"
         @navigate-up="navigateUp"
         @navigate-back="navigateBack"
         @navigate-forward="navigateForward"
@@ -56,6 +58,7 @@
         @cancel-transfer="onCancelTransfer"
         @pause-transfer="onPauseTransfer"
         @resume-transfer="onResumeTransfer"
+        @cancel-index="invoke('cancel_index_cmd')"
       />
       <TrashToolbar
         v-if="!showWelcome && isTrashView"
@@ -80,7 +83,7 @@
         @update:sort-dir="setSortDir"
       />
       <ActionToolbar
-        v-else-if="!showWelcome"
+        v-else-if="!showWelcome && !isSearchPath(currentPath)"
         :show-hidden="showHidden"
         :show-extensions="showExtensions"
         :show-selection-checkboxes="showSelectionCheckboxes"
@@ -108,6 +111,14 @@
         :sections="sidebarSections"
         @navigate="navigateTo"
       />
+      <SearchView
+        v-else-if="isSearchPath(currentPath)"
+        style="grid-row: 3; min-height: 0;"
+        :current-path="lastRealPath"
+        @navigate="navigateTo"
+        @open-file="openFile"
+        @update:result-count="searchResultCount = $event"
+      />
       <MainContent
         v-else
         ref="mainContentRef"
@@ -132,7 +143,7 @@
         @cursor-changed="onCursorChanged"
       />
       <StatusBar
-        :shown-count="sortedEntries.length"
+        :shown-count="isSearchPath(currentPath) ? searchResultCount : sortedEntries.length"
         :selected-count="selectedEntries.length"
         :show-selected-size="showSelectionSize"
         :selected-size-bytes="selectionSizeBytes"
@@ -172,10 +183,12 @@ import { bootstrapPreferencesStore } from './lib/preferencesStore';
 import {
   FM_TRASH,
   FM_WELCOME,
+  FM_SEARCH,
   canonicalizePath,
   createDraftPath,
   getVirtualPathLabel,
   isDraftPath,
+  isSearchPath,
   isTrashPath,
   isVirtualPath,
   isWelcomePath,
@@ -186,6 +199,7 @@ import Sidebar from './components/Sidebar.vue';
 import Toolbar from './components/Toolbar.vue';
 import WelcomePage from './components/WelcomePage.vue';
 import WinControls from './components/WinControls.vue';
+import SearchView from './components/SearchView.vue';
 
 const platformData = typeof navigator !== 'undefined' && /Mac|Darwin/.test(navigator.platform || navigator.userAgent || '') ? 'macos' : '';
 
@@ -213,6 +227,10 @@ const clipboardPaths   = ref([]);
 const clipboardOp      = ref('');  // 'cut' | 'copy' | ''
 const transferJobs     = ref([]);  // { id, op, done, total, bytes_done, bytes_total, current, paused }[]
 const quicklookOpen    = ref(false);
+const indexing         = ref(false);
+const indexDone        = ref(0);
+const lastRealPath     = ref('');
+const searchResultCount = ref(0);
 
 const pathHistory = ref([]);
 const historyIndex = ref(-1);
@@ -339,10 +357,21 @@ async function navigateTo(path, options = {}) {
     return;
   }
 
+  if (isSearchPath(nextPath)) {
+    await cancelActiveRequest();
+    showWelcome.value = false;
+    currentPath.value = FM_SEARCH;
+    entries.value = [];
+    loading.value = false;
+    if (shouldRecordHistory) recordHistory(FM_SEARCH);
+    return;
+  }
+
   await cancelActiveRequest();
 
   showWelcome.value = false;
   currentPath.value = nextPath;
+  lastRealPath.value = nextPath;
   entries.value = [];
   clearThumbnailQueue();
   selectedPaths.value = [];
@@ -968,7 +997,13 @@ async function hookEvents() {
     const { action, kind, paths = [] } = payload;
     if (!action) return;
     const singlePath = paths[0] ?? null;
-    if (action === 'open') {
+    if (action === 'show_in_folder') {
+      if (!singlePath) return;
+      const sep = singlePath.includes('/') ? '/' : '\\';
+      const parent = singlePath.split(sep).slice(0, -1).join(sep) || sep;
+      navigateTo(parent);
+      return;
+    } else if (action === 'open') {
       if (!singlePath) return;
       if (kind === 'dir' || kind === 'sidebar_item') navigateTo(singlePath);
       else void openFile(singlePath);
@@ -1087,7 +1122,23 @@ async function hookEvents() {
     else if (payload.startsWith('navigate:'))   navigateTo(payload.slice(9));
   });
 
-  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo, unlistenProgress, unlistenDone, unlistenDisksChanged, unlistenNewItem, unlistenMenuAction);
+  const unlistenIndexProgress = await listen('fm://index-progress', ({ payload }) => {
+    indexing.value = true;
+    indexDone.value = payload.done ?? 0;
+  });
+  const unlistenIndexDone = await listen('fm://index-done', () => {
+    indexing.value = false;
+  });
+
+  // Auto-start indexer if stale (never indexed, or last indexed > 30 min ago)
+  const stats = await invoke('get_index_stats_cmd').catch(() => null);
+  const stale = !stats?.last_indexed ||
+    (Math.floor(Date.now() / 1000) - stats.last_indexed) > 30 * 60;
+  if (stale && !stats?.is_running) {
+    invoke('start_index_cmd').catch(() => {});
+  }
+
+  unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo, unlistenProgress, unlistenDone, unlistenDisksChanged, unlistenNewItem, unlistenMenuAction, unlistenIndexProgress, unlistenIndexDone);
 }
 
 // Keys that have no meaning in a file manager but trigger browser defaults.
@@ -1163,6 +1214,11 @@ function onTitlebarMouseup() {
 }
 
 function onAppKeyDown(event) {
+  if (event.key === 'F12' || (event.altKey && event.metaKey && event.key === 'i')) {
+    invoke('open_devtools_cmd');
+    event.preventDefault();
+    return;
+  }
   if (event.key !== 'Escape') return;
   if (propertiesEntries.value.length) {
     propertiesEntries.value = [];
@@ -1218,7 +1274,7 @@ onMounted(async () => {
     onNavigateBack: navigateBack,
     onNavigateForward: navigateForward,
     onNewFolder: startCreateFolderDraft,
-    onFocusAddressBar: () => toolbarRef.value?.startAddressEditing?.(),
+    onFocusAddressBar: () => navigateTo(FM_SEARCH),
     onRefresh: refreshCurrentView,
     onCut,
     onCopy,

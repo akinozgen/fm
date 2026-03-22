@@ -15,12 +15,14 @@ mod core;
 mod context_menu;
 mod dir_size;
 mod icons;
+mod indexer;
 mod pinned_favorites;
 mod sidebar;
 mod storage;
 mod thumbnails;
 mod transfer;
 use core::{read_dir, walk_dir, CancelFlag, FileCoreState, ReadOptions};
+use indexer::IndexerState;
 use context_menu::{show_file_context_menu_cmd, ContextMenuState};
 use dir_size::{cancel_dir_size_cmd, compute_dir_size_cmd, DirSizeState};
 use icons::get_file_icon_png_base64;
@@ -132,6 +134,24 @@ impl QuickLookState {
   fn new() -> Self {
     Self { path: Mutex::new(String::new()) }
   }
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+#[derive(serde::Serialize, Clone)]
+struct SearchResult {
+  path:        String,
+  name:        String,
+  ext:         Option<String>,
+  is_dir:      bool,
+  size:        Option<u64>,
+  modified_ms: Option<u64>,
+}
+
+#[derive(serde::Serialize)]
+struct IndexStats {
+  file_count:   u64,
+  last_indexed: Option<u64>,
+  is_running:   bool,
 }
 
 // ── Quick Look: rich file metadata ────────────────────────────────────────────
@@ -258,6 +278,14 @@ fn get_file_metadata_cmd(path: String) -> Result<FileMetadata, String> {
 
   Ok(FileMetadata { path, name, ext, size, modified_ms, created_ms, is_dir,
                     image_width, image_height, line_count, mime_type })
+}
+
+#[tauri::command]
+fn open_devtools_cmd(app: AppHandle) {
+  if let Some(w) = app.get_webview_window("main") {
+    #[cfg(debug_assertions)]
+    w.open_devtools();
+  }
 }
 
 #[tauri::command]
@@ -1571,6 +1599,148 @@ fn archive_stem(path: &std::path::Path) -> String {
   name
 }
 
+// ── Search commands ───────────────────────────────────────────────────────────
+#[tauri::command]
+async fn start_index_cmd(
+  app: AppHandle,
+  state: State<'_, IndexerState>,
+  storage: State<'_, StorageState>,
+) -> Result<(), String> {
+  if state.is_running.load(Ordering::Relaxed) {
+    return Ok(());
+  }
+  let cancel = state.start();
+  let db_path = storage.paths.db_path.clone();
+  let is_running = state.is_running.clone();
+  tauri::async_runtime::spawn(async move {
+    tokio::task::spawn_blocking(move || {
+      indexer::run_index(db_path, cancel, app);
+      is_running.store(false, Ordering::Relaxed);
+    })
+    .await
+    .ok();
+  });
+  Ok(())
+}
+
+#[tauri::command]
+fn cancel_index_cmd(state: State<'_, IndexerState>) {
+  state.cancel.store(true, Ordering::Relaxed);
+}
+
+#[tauri::command]
+fn search_files_cmd(
+  storage: State<'_, StorageState>,
+  query: String,
+  scope: String,
+  current_path: Option<String>,
+  limit: Option<usize>,
+) -> Result<Vec<SearchResult>, String> {
+  let q = query.trim();
+  // FTS5 trigram tokenizer requires >= 3 characters
+  if q.len() < 3 {
+    return Ok(vec![]);
+  }
+  let limit = limit.unwrap_or(200) as i64;
+
+  // Wrap in double quotes for a literal phrase query so FTS5 operators
+  // ('-', '*', '(', etc.) inside the user's text are treated as plain characters.
+  let fts_query = format!("\"{}\"", q.replace('"', "\"\""));
+
+  let conn = rusqlite::Connection::open(&storage.paths.db_path)
+    .map_err(|e| format!("db open error: {e}"))?;
+
+  // Build a path prefix for Rust-side filtering (avoids FTS5 + LIKE interaction quirks)
+  let path_prefix: Option<String> = match scope.as_str() {
+    "home"    => std::env::var("HOME").ok(),
+    "current" => current_path,
+    _         => None,
+  };
+
+  fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchResult> {
+    let name: String             = row.get(0)?;
+    let path: String             = row.get(1)?;
+    let is_dir: i64              = row.get(2)?;
+    let size: Option<i64>        = row.get(3)?;
+    let modified_ms: Option<i64> = row.get(4)?;
+    let ext = std::path::Path::new(&name)
+      .extension()
+      .and_then(|e| e.to_str())
+      .map(|e| e.to_lowercase());
+    Ok(SearchResult {
+      name, path, ext,
+      is_dir: is_dir != 0,
+      size: size.map(|s| s as u64),
+      modified_ms: modified_ms.map(|m| m as u64),
+    })
+  }
+
+  // Fetch a large batch from FTS5 (no path filter in SQL — FTS5 applies LIMIT before
+  // post-filtering which causes scoped queries to return nothing), then filter in Rust.
+  let fetch_limit = if path_prefix.is_some() { limit * 20 } else { limit };
+  let mut stmt = conn
+    .prepare(
+      "SELECT name, path, is_dir, size, modified_ms
+       FROM file_index
+       WHERE name MATCH ?1
+       ORDER BY rank LIMIT ?2",
+    )
+    .map_err(|e| format!("prepare error: {e}"))?;
+  let rows = stmt
+    .query_map(rusqlite::params![fts_query, fetch_limit], map_row)
+    .map_err(|e| format!("query error: {e}"))?;
+
+  let results: Vec<SearchResult> = rows
+    .flatten()
+    .filter(|r| {
+      match &path_prefix {
+        Some(prefix) => r.path.starts_with(prefix.as_str()),
+        None => true,
+      }
+    })
+    .take(limit as usize)
+    .collect();
+
+  Ok(results)
+}
+
+#[tauri::command]
+fn get_index_stats_cmd(
+  storage: State<'_, StorageState>,
+  indexer: State<'_, IndexerState>,
+) -> Result<IndexStats, String> {
+  let conn = rusqlite::Connection::open(&storage.paths.db_path)
+    .map_err(|e| format!("db open error: {e}"))?;
+
+  let mut file_count: u64 = 0;
+  let mut last_indexed: Option<u64> = None;
+
+  let mut s = conn
+    .prepare("SELECT key, value FROM index_meta")
+    .map_err(|e| format!("prepare error: {e}"))?;
+  let rows = s
+    .query_map([], |row| {
+      let key: String   = row.get(0)?;
+      let value: String = row.get(1)?;
+      Ok((key, value))
+    })
+    .map_err(|e| format!("query error: {e}"))?;
+
+  for row in rows.flatten() {
+    match row.0.as_str() {
+      "file_count"   => file_count   = row.1.parse().unwrap_or(0),
+      "last_indexed" => last_indexed = row.1.parse().ok(),
+      _ => {}
+    }
+  }
+
+  Ok(IndexStats {
+    file_count,
+    last_indexed,
+    is_running: indexer.is_running.load(Ordering::Relaxed),
+  })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let storage_paths = bootstrap_storage().expect("failed to bootstrap storage");
@@ -1589,6 +1759,7 @@ pub fn run() {
     .manage(ArchiveState::new())
     .manage(QuickLookState::new())
     .manage(MenuPathStore::new())
+    .manage(IndexerState::new())
     .invoke_handler(tauri::generate_handler![
       read_dir_cmd,
       walk_dir_cmd,
@@ -1641,6 +1812,11 @@ pub fn run() {
       open_quicklook_cmd,
       get_quicklook_path_cmd,
       get_audio_metadata_cmd,
+      start_index_cmd,
+      cancel_index_cmd,
+      search_files_cmd,
+      get_index_stats_cmd,
+      open_devtools_cmd,
     ])
     .setup(|app| {
       // Create main window programmatically so we can apply platform-specific titlebar settings.

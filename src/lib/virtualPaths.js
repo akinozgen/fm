@@ -2,6 +2,7 @@ export const FM_SCHEME = 'fm://';
 export const FM_WELCOME = 'fm://welcome';
 export const FM_HOME_ALIAS = 'fm://home';
 export const FM_TRASH = 'fm://trash';
+export const FM_SEARCH = 'fm://search';
 export const FM_DRAFT_PREFIX = 'fm://draft/';
 
 export function normalizePath(path) {
@@ -27,12 +28,16 @@ export function isTrashPath(path) {
   return canonicalizePath(path) === FM_TRASH;
 }
 
+export function isSearchPath(path) {
+  return canonicalizePath(path) === FM_SEARCH;
+}
+
 export function isDraftPath(path) {
   return canonicalizePath(path).startsWith(FM_DRAFT_PREFIX);
 }
 
 export function canBrowsePath(path) {
-  return !isWelcomePath(path) && !isTrashPath(path);
+  return !isWelcomePath(path) && !isTrashPath(path) && !isSearchPath(path);
 }
 
 export function createDraftPath(kind = 'item') {
@@ -42,6 +47,7 @@ export function createDraftPath(kind = 'item') {
 export function getVirtualPathLabel(path) {
   const normalized = canonicalizePath(path);
   if (normalized === FM_WELCOME) return 'Home';
-  if (normalized === FM_TRASH) return 'Trash';
+  if (normalized === FM_TRASH)   return 'Trash';
+  if (normalized === FM_SEARCH)  return 'Search';
   return '';
 }

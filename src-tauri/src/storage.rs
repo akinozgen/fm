@@ -60,6 +60,20 @@ fn bootstrap_db(db_path: &PathBuf) -> Result<(), String> {
 
       CREATE INDEX IF NOT EXISTS idx_navigation_history_visited_at
       ON navigation_history(visited_at DESC);
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS file_index USING fts5(
+        name,
+        path        UNINDEXED,
+        is_dir      UNINDEXED,
+        size        UNINDEXED,
+        modified_ms UNINDEXED,
+        tokenize = 'trigram'
+      );
+
+      CREATE TABLE IF NOT EXISTS index_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
       "#,
     )
     .map_err(|e| format!("failed to initialize db schema: {e}"))?;

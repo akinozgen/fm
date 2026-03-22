@@ -2,16 +2,37 @@
   <div ref="pathbarRef" class="pathbar" @contextmenu.prevent="openAddressMenu" @click="onPathbarClick">
     <div class="pathbar-content">
       <template v-if="!isEditing">
-        <button
-          v-for="crumb in crumbs"
-          :key="crumb.path"
-          class="crumb"
-          :class="{ current: crumb.current }"
-          @click="$emit('navigate', crumb.path)"
-        >
-          <component v-if="crumb.icon" :is="crumb.icon" :size="12" class="crumb-icon" />
-          {{ crumb.label }}
-        </button>
+        <!-- Head: always-visible leading crumbs -->
+        <template v-for="(crumb, i) in displayCrumbs.head" :key="crumb.path">
+          <span v-if="i > 0" class="crumb-sep" aria-hidden="true">›</span>
+          <button
+            class="crumb"
+            :class="{ current: crumb.current }"
+            @click="$emit('navigate', crumb.path)"
+          >
+            <component v-if="crumb.icon" :is="crumb.icon" :size="11" class="crumb-icon" />
+            {{ crumb.label }}
+          </button>
+        </template>
+
+        <!-- Collapsed middle -->
+        <template v-if="displayCrumbs.collapsed.length">
+          <span class="crumb-sep" aria-hidden="true">›</span>
+          <button ref="collapseWrapRef" class="crumb crumb-ellipsis" @click.stop="openCollapse" aria-label="Show hidden path segments">···</button>
+        </template>
+
+        <!-- Tail: always-visible trailing crumbs -->
+        <template v-for="crumb in displayCrumbs.tail" :key="crumb.path">
+          <span class="crumb-sep" aria-hidden="true">›</span>
+          <button
+            class="crumb"
+            :class="{ current: crumb.current }"
+            @click="$emit('navigate', crumb.path)"
+          >
+            <component v-if="crumb.icon" :is="crumb.icon" :size="11" class="crumb-icon" />
+            {{ crumb.label }}
+          </button>
+        </template>
       </template>
       <input
         v-else
@@ -24,6 +45,20 @@
         @keydown.esc.prevent="cancelEditing"
         @blur="cancelEditing"
       />
+    </div>
+    <div
+      v-if="collapseOpen && displayCrumbs.collapsed.length"
+      class="crumb-collapse-dropdown"
+      :style="{ left: collapseDropdownLeft + 'px' }"
+    >
+      <button
+        v-for="crumb in displayCrumbs.collapsed"
+        :key="crumb.path"
+        class="crumb-collapse-item"
+        @mousedown.prevent="navigateCollapsed(crumb.path)"
+      >
+        {{ crumb.label }}
+      </button>
     </div>
     <div v-if="isEditing && dropdownItems.length > 0" class="path-history-dropdown">
       <div
@@ -61,8 +96,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
-import { HardDrive, House, Trash2 } from 'lucide-vue-next';
-import { canonicalizePath, FM_TRASH, FM_WELCOME, getVirtualPathLabel, isTrashPath, isWelcomePath, normalizePath } from '../lib/virtualPaths';
+import { HardDrive, House, Search, Trash2 } from 'lucide-vue-next';
+import { canonicalizePath, FM_SEARCH, FM_TRASH, FM_WELCOME, getVirtualPathLabel, isSearchPath, isTrashPath, isWelcomePath, normalizePath } from '../lib/virtualPaths';
 
 const props = defineProps({
   currentPath: {
@@ -85,7 +120,12 @@ const isEditing = ref(false);
 const editValue = ref('');
 const pathInputRef = ref(null);
 const pathbarRef = ref(null);
-const dropdownHighlightIndex = ref(0);
+const collapseWrapRef = ref(null);
+const collapseOpen = ref(false);
+const collapseDropdownLeft = ref(0);
+const dropdownHighlightIndex = ref(-1);
+
+const COLLAPSE_THRESHOLD = 4;
 
 const crumbs = computed(() => {
   const raw = props.currentPath || '';
@@ -106,6 +146,16 @@ const crumbs = computed(() => {
         label: getVirtualPathLabel(FM_TRASH),
         path: FM_TRASH,
         icon: Trash2,
+        current: true
+      }
+    ];
+  }
+  if (isSearchPath(normalized)) {
+    return [
+      {
+        label: getVirtualPathLabel(FM_SEARCH),
+        path: FM_SEARCH,
+        icon: Search,
         current: true
       }
     ];
@@ -151,6 +201,18 @@ const crumbs = computed(() => {
   }
 
   return result;
+});
+
+const displayCrumbs = computed(() => {
+  const all = crumbs.value;
+  if (all.length <= COLLAPSE_THRESHOLD) {
+    return { head: all, collapsed: [], tail: [] };
+  }
+  return {
+    head: all.slice(0, 1),
+    collapsed: all.slice(1, -2),
+    tail: all.slice(-2)
+  };
 });
 
 const filteredHistory = computed(() => {
@@ -213,15 +275,32 @@ function openAddressMenu(event) {
   });
 }
 
+function openCollapse() {
+  if (!collapseOpen.value && collapseWrapRef.value && pathbarRef.value) {
+    const btnRect = collapseWrapRef.value.getBoundingClientRect();
+    const barRect = pathbarRef.value.getBoundingClientRect();
+    collapseDropdownLeft.value = btnRect.left - barRect.left;
+  }
+  collapseOpen.value = !collapseOpen.value;
+}
+
+function navigateCollapsed(path) {
+  collapseOpen.value = false;
+  emit('navigate', path);
+}
+
 function onPathbarClick(event) {
   if (isEditing.value) return;
   if (event.target.closest('.crumb')) return;
+  if (event.target.closest('.crumb-collapse-wrap')) return;
   if (event.target.closest('.path-history-dropdown')) return;
   if (event.target.closest('.path-input')) return;
   startEditing();
 }
 
 function startEditing() {
+  const canonical = canonicalizePath(normalizePath(props.currentPath || ''));
+  if (canonical === FM_WELCOME || canonical === FM_TRASH || canonical === FM_SEARCH) return;
   isEditing.value = true;
   editValue.value = props.currentPath || '';
   nextTick(() => {
@@ -299,7 +378,7 @@ function onInputKeydown(e) {
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      dropdownHighlightIndex.value = Math.max(0, dropdownHighlightIndex.value - 1);
+      dropdownHighlightIndex.value = Math.max(-1, dropdownHighlightIndex.value - 1);
       return;
     }
     if (e.key === 'Enter') {
@@ -327,6 +406,12 @@ function removeHistoryPath(path) {
 }
 
 function onWindowPointerDown(event) {
+  if (collapseOpen.value) {
+    const btn = collapseWrapRef.value;
+    if (!btn || !btn.contains(event.target)) {
+      collapseOpen.value = false;
+    }
+  }
   if (!isEditing.value) return;
   const root = pathbarRef.value;
   if (!root) return;
@@ -337,14 +422,15 @@ function onWindowPointerDown(event) {
 watch(
   () => props.currentPath,
   () => {
+    collapseOpen.value = false;
     if (!isEditing.value) {
       editValue.value = props.currentPath || '';
     }
   }
 );
 
-watch(dropdownItems, (items) => {
-  dropdownHighlightIndex.value = 0;
+watch(dropdownItems, () => {
+  dropdownHighlightIndex.value = -1;
 });
 
 onMounted(() => {

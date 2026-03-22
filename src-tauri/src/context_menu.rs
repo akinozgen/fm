@@ -234,6 +234,7 @@ pub fn show_file_context_menu_cmd(
   paths: Vec<String>,
   is_pinned: Option<bool>,
   is_app_bundle: Option<bool>,
+  is_search: Option<bool>,
 ) -> Result<(), String> {
   *state.paths.lock().unwrap() = paths.clone();
   *state.kind.lock().unwrap() = kind.clone();
@@ -258,6 +259,12 @@ pub fn show_file_context_menu_cmd(
     "sidebar_item" => build_sidebar_item_menu(&app, is_pinned.unwrap_or(false))?,
     _              => return Err(format!("unsupported context kind: {kind}")),
   };
+
+  // In search results, append "Show in Folder" to non-empty menus
+  if is_search.unwrap_or(false) && kind != "empty" {
+    let _ = menu.append(&sep(&app)?);
+    let _ = menu.append(&item(&app, "show_in_folder", "Show in Folder")?);
+  }
 
   window
     .popup_menu_at(&menu, Position::Logical(LogicalPosition::new(x, y)))

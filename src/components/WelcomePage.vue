@@ -1,87 +1,89 @@
 <template>
   <div class="welcome-page">
-    <section class="welcome-hero">
-      <h1 class="welcome-title">fm</h1>
-      <p class="welcome-subtitle">Open a folder or drive to get started.</p>
-    </section>
 
-    <section class="welcome-section" v-if="pinnedItems.length > 0">
-      <div class="welcome-section-head">
-        <Pin :size="12" />
-        <span>Favorites</span>
-      </div>
-      <div class="welcome-grid">
-        <button
-          v-for="item in pinnedItems"
-          :key="item.path"
-          class="welcome-card welcome-card--compact"
-          @click="$emit('navigate', item.path)"
-        >
-          <Folder :size="16" class="welcome-card-icon" />
-          <span class="welcome-card-title">{{ item.label }}</span>
-        </button>
-      </div>
-    </section>
+    <!-- Pinned strip — only shown when there are pinned items -->
+    <div v-if="pinnedItems.length" class="wp-pinned">
+      <Pin :size="10" class="wp-pinned-meta-icon" />
+      <span class="wp-pinned-meta">Favorites</span>
+      <button
+        v-for="item in pinnedItems"
+        :key="item.path"
+        class="wp-pinned-item"
+        @click="$emit('navigate', item.path)"
+      >
+        <Folder :size="12" />
+        {{ item.label }}
+      </button>
+    </div>
 
-    <section class="welcome-section">
-      <div class="welcome-section-head">
-        <Star :size="12" />
-        <span>Quick access</span>
-      </div>
-      <div class="welcome-grid">
-        <button
-          v-for="item in quickAccessItems"
-          :key="item.path"
-          class="welcome-card welcome-card--compact"
-          @click="$emit('navigate', item.path)"
-        >
-          <component :is="iconFor(item)" :size="16" class="welcome-card-icon" />
-          <span class="welcome-card-title">{{ item.label }}</span>
-        </button>
-      </div>
-    </section>
+    <!-- Two-column body -->
+    <div class="wp-body">
 
-    <section class="welcome-section">
-      <div class="welcome-section-head">
-        <HardDrive :size="12" />
-        <span>Drives</span>
+      <!-- Left: Locations -->
+      <div class="wp-col">
+        <p class="wp-col-head">Locations</p>
+        <div class="wp-rows">
+          <button
+            v-for="item in quickAccessItems"
+            :key="item.path"
+            class="wp-row"
+            @click="$emit('navigate', item.path)"
+          >
+            <component :is="iconFor(item)" :size="15" class="wp-row-icon" :class="iconClass(item)" />
+            <span class="wp-row-label">{{ item.label }}</span>
+          </button>
+        </div>
       </div>
-      <div class="welcome-grid">
-        <button
-          v-for="item in drives"
-          :key="item.path"
-          class="welcome-card welcome-card--compact"
-          @click="$emit('navigate', item.path)"
-        >
-          <HardDrive :size="16" class="welcome-card-icon" />
-          <span class="welcome-card-title">{{ item.label }}</span>
-        </button>
-      </div>
-    </section>
 
-    <section class="welcome-section" v-if="removable.length > 0">
-      <div class="welcome-section-head">
-        <Usb :size="12" />
-        <span>Removable</span>
+      <!-- Right: Drives + Removable -->
+      <div class="wp-col wp-col--right">
+        <template v-if="drives.length">
+          <p class="wp-col-head">Devices</p>
+          <div class="wp-rows">
+            <button
+              v-for="item in drives"
+              :key="item.path"
+              class="wp-row"
+              @click="$emit('navigate', item.path)"
+            >
+              <HardDrive :size="15" class="wp-row-icon wp-row-icon--device" />
+              <span class="wp-row-label">{{ item.label }}</span>
+              <span class="wp-row-sub">{{ item.path }}</span>
+            </button>
+          </div>
+        </template>
+
+        <template v-if="removable.length">
+          <p class="wp-col-head" :class="{ 'wp-col-head--gap': drives.length }">Removable</p>
+          <div class="wp-rows">
+            <div
+              v-for="item in removable"
+              :key="item.path"
+              class="wp-row wp-row--removable"
+            >
+              <button class="wp-row-main" @click="$emit('navigate', item.path)">
+                <Usb :size="15" class="wp-row-icon wp-row-icon--device" />
+                <span class="wp-row-label">{{ item.label }}</span>
+                <span class="wp-row-sub">{{ item.path }}</span>
+              </button>
+              <button class="wp-eject-btn" title="Unmount" @click.stop="unmount(item.path)">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M2 9.5h8M6 1.5 2 7h8L6 1.5Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </template>
       </div>
-      <div class="welcome-grid">
-        <button
-          v-for="item in removable"
-          :key="item.path"
-          class="welcome-card welcome-card--compact removable"
-          @click="$emit('navigate', item.path)"
-        >
-          <Usb :size="16" class="welcome-card-icon" />
-          <span class="welcome-card-title">{{ item.label }}</span>
-        </button>
-      </div>
-    </section>
+
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue';
-import { Download, FileText, Folder, HardDrive, Home, Music, PictureInPicture2, Pin, Star, Trash2, Usb, Video } from 'lucide-vue-next';
+import { Download, FileText, Folder, HardDrive, Home, Music, PictureInPicture2, Pin, Trash2, Usb, Video } from 'lucide-vue-next';
+import { invoke } from '@tauri-apps/api/core';
 
 const props = defineProps({
   sections: {
@@ -97,9 +99,7 @@ const userSection = computed(() => {
 });
 
 const pinnedItems = computed(() => (userSection.value?.items || []).filter((i) => i.kind === 'pinned'));
-
 const quickAccessItems = computed(() => (userSection.value?.items || []).filter((i) => i.kind !== 'pinned'));
-
 const drives = computed(() => findSection('Drives'));
 const removable = computed(() => findSection('Removable'));
 
@@ -117,5 +117,18 @@ function iconFor(item) {
   if (item.label === 'Music') return Music;
   if (item.label === 'Videos') return Video;
   return Folder;
+}
+
+function iconClass(item) {
+  if (item.kind === 'trash') return 'wp-row-icon--trash';
+  return '';
+}
+
+async function unmount(path) {
+  try {
+    await invoke('unmount_drive_cmd', { path });
+  } catch (e) {
+    console.error('unmount failed:', e);
+  }
 }
 </script>

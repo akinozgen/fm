@@ -16,6 +16,11 @@
       @open-failed="(msg) => $emit('open-failed', msg)"
       @open-path="(path) => $emit('open-path', path)"
     />
+    <IndexBar
+      :indexing="indexing"
+      :index-done="indexDone"
+      @cancel="$emit('cancel-index')"
+    />
     <div v-if="transferJobs.length > 0" ref="transferWrapRef" class="transfer-btn-wrap view-group">
       <button
         class="pill-btn transfer-progress-btn"
@@ -62,6 +67,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ArrowUp, ChevronLeft, ChevronRight, Copy, Scissors } from 'lucide-vue-next';
 import AddressBar from './AddressBar.vue';
 import TransferBar from './TransferBar.vue';
+import IndexBar from './IndexBar.vue';
 
 const CIRCUMFERENCE = 2 * Math.PI * 10;
 
@@ -76,7 +82,8 @@ const emit = defineEmits([
   'open-path',
   'cancel-transfer',
   'pause-transfer',
-  'resume-transfer'
+  'resume-transfer',
+  'cancel-index',
 ]);
 const props = defineProps({
   currentPath: {
@@ -94,7 +101,15 @@ const props = defineProps({
   transferJobs: {
     type: Array,
     default: () => []
-  }
+  },
+  indexing: {
+    type: Boolean,
+    default: false,
+  },
+  indexDone: {
+    type: Number,
+    default: 0,
+  },
 });
 
 const addressBarRef = ref(null);
