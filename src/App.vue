@@ -1130,13 +1130,6 @@ async function hookEvents() {
     indexing.value = false;
   });
 
-  // Auto-start indexer if stale (never indexed, or last indexed > 30 min ago)
-  const stats = await invoke('get_index_stats_cmd').catch(() => null);
-  const stale = !stats?.last_indexed ||
-    (Math.floor(Date.now() / 1000) - stats.last_indexed) > 30 * 60;
-  if (stale && !stats?.is_running) {
-    invoke('start_index_cmd').catch(() => {});
-  }
 
   unlistenFns.push(unlistenMenu, unlistenChunk, unlistenDirChanged, unlistenContextInfo, unlistenProgress, unlistenDone, unlistenDisksChanged, unlistenNewItem, unlistenMenuAction, unlistenIndexProgress, unlistenIndexDone);
 }

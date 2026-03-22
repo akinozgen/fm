@@ -1605,6 +1605,7 @@ async fn start_index_cmd(
   app: AppHandle,
   state: State<'_, IndexerState>,
   storage: State<'_, StorageState>,
+  force: Option<bool>,
 ) -> Result<(), String> {
   if state.is_running.load(Ordering::Relaxed) {
     return Ok(());
@@ -1612,9 +1613,10 @@ async fn start_index_cmd(
   let cancel = state.start();
   let db_path = storage.paths.db_path.clone();
   let is_running = state.is_running.clone();
+  let force = force.unwrap_or(false);
   tauri::async_runtime::spawn(async move {
     tokio::task::spawn_blocking(move || {
-      indexer::run_index(db_path, cancel, app);
+      indexer::run_index(db_path, cancel, app, force);
       is_running.store(false, Ordering::Relaxed);
     })
     .await
@@ -1886,6 +1888,53 @@ pub fn run() {
       app.handle().plugin(tauri_plugin_clipboard_manager::init())?;
       app.handle().plugin(tauri_plugin_dialog::init())?;
       app.handle().plugin(tauri_plugin_store::Builder::default().build())?;
+
+      // Auto-start indexer based on staleness of last index run.
+      // > 30 min → full rebuild; 5–30 min → incremental; < 5 min → skip.
+      {
+        let handle = app.handle().clone();
+        if let Some(storage) = app.try_state::<StorageState>() {
+          let db_path = storage.paths.db_path.clone();
+          tauri::async_runtime::spawn(async move {
+            let force = {
+              let age_secs: Option<u64> = rusqlite::Connection::open(&db_path).ok().and_then(|conn| {
+                conn.query_row(
+                  "SELECT value FROM index_meta WHERE key = 'last_indexed'",
+                  [],
+                  |row| row.get::<_, String>(0),
+                )
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|last| {
+                  std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+                    .saturating_sub(last)
+                })
+              });
+              match age_secs {
+                None => Some(true),           // never indexed → full
+                Some(a) if a > 30 * 60 => Some(true),   // > 30 min → full
+                Some(a) if a > 5 * 60  => Some(false),  // > 5 min  → incremental
+                _ => None,                    // < 5 min → skip
+              }
+            };
+            if let Some(force) = force {
+              if let Some(state) = handle.try_state::<IndexerState>() {
+                if !state.is_running.load(std::sync::atomic::Ordering::Relaxed) {
+                  let cancel = state.start();
+                  let is_running = state.is_running.clone();
+                  tokio::task::spawn_blocking(move || {
+                    indexer::run_index(db_path, cancel, handle, force);
+                    is_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                  });
+                }
+              }
+            }
+          });
+        }
+      }
 
       // Watch for OS-level disk mount/unmount events by polling every 2 seconds.
       {

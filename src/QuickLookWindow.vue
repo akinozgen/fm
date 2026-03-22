@@ -123,36 +123,36 @@
       <div class="ql-meta">
         <div class="ql-meta-grid">
           <span class="ql-label">Name</span>
-          <span class="ql-value">{{ metadata.name }}</span>
+          <span class="ql-value" contenteditable="true" spellcheck="false" @beforeinput.prevent>{{ metadata.name }}</span>
 
           <span class="ql-label">Kind</span>
-          <span class="ql-value">{{ kindLabel }}</span>
+          <span class="ql-value" contenteditable="true" spellcheck="false" @beforeinput.prevent>{{ kindLabel }}</span>
 
           <span class="ql-label">Size</span>
-          <span class="ql-value">{{ sizeLabel }}</span>
+          <span class="ql-value" contenteditable="true" spellcheck="false" @beforeinput.prevent>{{ sizeLabel }}</span>
 
           <span class="ql-label">Modified</span>
-          <span class="ql-value">{{ modifiedLabel }}</span>
+          <span class="ql-value" contenteditable="true" spellcheck="false" @beforeinput.prevent>{{ modifiedLabel }}</span>
 
           <span class="ql-label">Created</span>
-          <span class="ql-value">{{ createdLabel }}</span>
+          <span class="ql-value" contenteditable="true" spellcheck="false" @beforeinput.prevent>{{ createdLabel }}</span>
 
           <span class="ql-label">Location</span>
-          <span class="ql-value ql-path" :title="parentPath">{{ parentPath }}</span>
+          <span class="ql-value ql-path" :title="parentPath" contenteditable="true" spellcheck="false" @beforeinput.prevent>{{ parentPath }}</span>
 
           <template v-if="metadata.image_width">
             <span class="ql-label">Dimensions</span>
-            <span class="ql-value">{{ metadata.image_width }} × {{ metadata.image_height }} px</span>
+            <span class="ql-value" contenteditable="true" spellcheck="false" @beforeinput.prevent>{{ metadata.image_width }} × {{ metadata.image_height }} px</span>
           </template>
 
           <template v-if="metadata.line_count != null">
             <span class="ql-label">Lines</span>
-            <span class="ql-value">{{ metadata.line_count.toLocaleString() }}</span>
+            <span class="ql-value" contenteditable="true" spellcheck="false" @beforeinput.prevent>{{ metadata.line_count.toLocaleString() }}</span>
           </template>
 
           <template v-if="audioMeta?.duration_secs != null">
             <span class="ql-label">Duration</span>
-            <span class="ql-value">{{ fmtTime(audioMeta.duration_secs) }}</span>
+            <span class="ql-value" contenteditable="true" spellcheck="false" @beforeinput.prevent>{{ fmtTime(audioMeta.duration_secs) }}</span>
           </template>
         </div>
       </div>
@@ -191,9 +191,28 @@ const mediaEnded       = ref(false);
 const mediaProgress    = ref(0);
 const mediaTime        = ref(0);
 const audioMeta        = ref(null);
+const dirSizeBytes     = ref(null);
+const dirSizeDone      = ref(false);
 
-let editorView  = null;
-let unlistenNav = null;
+let editorView    = null;
+let unlistenNav   = null;
+let unlistenDirSz = null;
+
+async function startDirSize(path) {
+  dirSizeBytes.value = null;
+  dirSizeDone.value  = false;
+  if (unlistenDirSz) { unlistenDirSz(); unlistenDirSz = null; }
+  unlistenDirSz = await listen('fm://dir-size', (ev) => {
+    dirSizeBytes.value = ev.payload.bytes;
+    if (ev.payload.done) dirSizeDone.value = true;
+  });
+  invoke('compute_dir_size_cmd', { paths: [path] });
+}
+
+function stopDirSize() {
+  if (unlistenDirSz) { unlistenDirSz(); unlistenDirSz = null; }
+  invoke('cancel_dir_size_cmd').catch(() => {});
+}
 
 // ── Extension sets ─────────────────────────────────────────────────────────────
 const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','avif','tiff','tif','ico','qoi']);
@@ -238,13 +257,22 @@ const kindLabel = computed(() => {
   return `${ext.toUpperCase()} File`;
 });
 
+function formatBytes(n) {
+  if (n == null) return '—';
+  if (n < 1024)               return `${n} B`;
+  if (n < 1024 * 1024)        return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 const sizeLabel = computed(() => {
-  const s = metadata.value?.size;
-  if (s == null) return '—';
-  if (s < 1024)             return `${s} B`;
-  if (s < 1024 * 1024)      return `${(s / 1024).toFixed(1)} KB`;
-  if (s < 1024 * 1024 * 1024) return `${(s / 1024 / 1024).toFixed(1)} MB`;
-  return `${(s / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (!metadata.value) return '—';
+  if (metadata.value.is_dir) {
+    if (dirSizeBytes.value === null) return 'Computing…';
+    const label = formatBytes(dirSizeBytes.value);
+    return dirSizeDone.value ? label : `${label}…`;
+  }
+  return formatBytes(metadata.value.size);
 });
 
 function formatMs(ms) {
@@ -332,11 +360,14 @@ async function loadPreview(path) {
   audioEl.value?.pause();
   if (editorView) { editorView.destroy(); editorView = null; }
 
+  stopDirSize();
+
   // 1. Fetch metadata — show it as soon as possible
   try {
     const meta = await invoke('get_file_metadata_cmd', { path });
     metadata.value = meta;
     previewType.value = getPreviewType(meta.ext);
+    if (meta.is_dir) startDirSize(path);
   } catch (err) {
     loadError.value = String(err);
     loading.value = false;
@@ -479,6 +510,7 @@ onBeforeUnmount(() => {
   editorView?.destroy();
   videoEl.value?.pause();
   audioEl.value?.pause();
+  stopDirSize();
 });
 </script>
 
@@ -762,6 +794,8 @@ onBeforeUnmount(() => {
   font-weight: 500;
   padding-top: 1px;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .ql-value {

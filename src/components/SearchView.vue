@@ -206,7 +206,7 @@ async function pickCustomLocation() {
 }
 
 async function reindex() {
-  await invoke('start_index_cmd').catch(() => {});
+  await invoke('start_index_cmd', { force: true }).catch(() => {});
   indexStats.value = await invoke('get_index_stats_cmd').catch(() => null);
 }
 

@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -21,7 +22,6 @@ impl IndexerState {
     }
   }
 
-  /// Reset cancel flag, mark running. Returns a clone of the cancel flag for the worker.
   pub fn start(&self) -> Arc<AtomicBool> {
     self.cancel.store(false, Ordering::Relaxed);
     self.is_running.store(true, Ordering::Relaxed);
@@ -107,88 +107,240 @@ fn flush_batch(
   }
 }
 
-pub fn run_index(db_path: String, cancel: Arc<AtomicBool>, app: AppHandle) {
+fn dir_mtime_ms(path: &Path) -> i64 {
+  std::fs::metadata(path)
+    .ok()
+    .and_then(|m| m.modified().ok())
+    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+    .map(|d| d.as_millis() as i64)
+    .unwrap_or(-1)
+}
+
+fn load_dir_mtime_cache(conn: &Connection) -> HashMap<String, i64> {
+  let mut cache = HashMap::new();
+  let Ok(mut stmt) = conn.prepare("SELECT path, mtime_ms FROM dir_mtime_cache") else {
+    return cache;
+  };
+  if let Ok(rows) = stmt.query_map([], |row| {
+    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+  }) {
+    for row in rows.flatten() {
+      cache.insert(row.0, row.1);
+    }
+  }
+  cache
+}
+
+pub fn run_index(db_path: String, cancel: Arc<AtomicBool>, app: AppHandle, force: bool) {
   let conn = match Connection::open(&db_path) {
     Ok(c) => c,
-    Err(e) => {
-      log::error!("indexer: failed to open db: {e}");
-      return;
-    }
+    Err(e) => { log::error!("indexer: failed to open db: {e}"); return; }
   };
-
   if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL;") {
-    log::error!("indexer: failed to set WAL: {e}");
-    return;
+    log::error!("indexer: failed to set WAL: {e}"); return;
   }
 
-  if let Err(e) = conn.execute("DELETE FROM file_index", []) {
-    log::error!("indexer: failed to clear index: {e}");
-    return;
+  let old_cache: HashMap<String, i64> = if force { HashMap::new() } else { load_dir_mtime_cache(&conn) };
+  // Treat as full rebuild when no prior cache exists (e.g. first launch)
+  let effective_force = force || old_cache.is_empty();
+
+  if effective_force {
+    if let Err(e) = conn.execute("DELETE FROM file_index", []) {
+      log::error!("indexer: failed to clear index: {e}"); return;
+    }
+    let _ = conn.execute("DELETE FROM index_meta", []);
+    let _ = conn.execute("DELETE FROM dir_mtime_cache", []);
   }
-  let _ = conn.execute("DELETE FROM index_meta", []);
 
   let roots = index_roots();
   let mut total: u64 = 0;
   let mut batch: Vec<(String, String, i64, Option<i64>, Option<i64>)> = Vec::with_capacity(500);
 
-  'outer: for root in &roots {
-    if !root.exists() {
-      continue;
-    }
+  if !effective_force {
+    // ── Incremental: two-pass ────────────────────────────────────────────────
 
-    let walker = WalkDir::new(root)
-      .follow_links(false)
-      .into_iter()
-      .filter_entry(|e| e.depth() == 0 || !should_skip(e.path()));
-
-    for entry in walker {
-      if cancel.load(Ordering::Relaxed) {
-        break 'outer;
-      }
-
-      let entry = match entry {
-        Ok(e) => e,
-        Err(_) => continue,
-      };
-
-      if entry.depth() == 0 {
-        continue;
-      }
-
-      let path = entry.path();
-      let name = match path.file_name().and_then(|n| n.to_str()) {
-        Some(n) => n.to_string(),
-        None => continue,
-      };
-      let path_str = path.to_string_lossy().to_string();
-      let is_dir: i64 = entry.file_type().is_dir() as i64;
-
-      let meta = entry.metadata().ok();
-      let size: Option<i64> = meta.as_ref().and_then(|m| {
-        if is_dir == 0 { Some(m.len() as i64) } else { None }
-      });
-      let modified_ms: Option<i64> = meta.as_ref().and_then(|m| {
-        m.modified().ok().and_then(|t| {
-          t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as i64)
-        })
-      });
-
-      batch.push((name, path_str, is_dir, size, modified_ms));
-      total += 1;
-
-      if batch.len() >= 500 {
-        flush_batch(&conn, &mut batch);
-        let _ = app.emit("fm://index-progress", serde_json::json!({ "done": total }));
+    // Pass 1 — scan all directories to find what changed
+    let mut new_dir_mtimes: HashMap<String, i64> = HashMap::new();
+    for root in &roots {
+      if !root.exists() { continue; }
+      let walker = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| e.depth() == 0 || !should_skip(e.path()));
+      for entry in walker.flatten() {
+        if cancel.load(Ordering::Relaxed) { break; }
+        if !entry.file_type().is_dir() || entry.depth() == 0 { continue; }
+        let path_str = entry.path().to_str().unwrap_or("").to_string();
+        new_dir_mtimes.insert(path_str, dir_mtime_ms(entry.path()));
       }
     }
+
+    let changed_dirs: HashSet<String> = new_dir_mtimes.iter()
+      .filter(|(path, &mtime)| old_cache.get(path.as_str()) != Some(&mtime))
+      .map(|(path, _)| path.clone())
+      .collect();
+
+    let deleted_dirs: Vec<String> = old_cache.keys()
+      .filter(|p| !new_dir_mtimes.contains_key(p.as_str()))
+      .cloned()
+      .collect();
+
+    if changed_dirs.is_empty() && deleted_dirs.is_empty() {
+      let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+      let _ = conn.execute(
+        "INSERT OR REPLACE INTO index_meta(key, value) VALUES ('last_indexed', ?1)",
+        rusqlite::params![now.to_string()],
+      );
+      let _ = app.emit("fm://index-done", serde_json::json!({ "count": 0 }));
+      log::info!("indexer: incremental — no changes detected");
+      return;
+    }
+
+    // Cleanup stale entries
+    if let Ok(tx) = conn.unchecked_transaction() {
+      for dir in &changed_dirs {
+        // Delete the dir's own entry
+        let _ = tx.execute("DELETE FROM file_index WHERE path = ?1", rusqlite::params![dir]);
+        // Delete immediate file children only (not deeper subtrees)
+        let _ = tx.execute(
+          "DELETE FROM file_index WHERE path LIKE ?1 AND path NOT LIKE ?2 AND is_dir = 0",
+          rusqlite::params![format!("{}/%", dir), format!("{}/%/%", dir)],
+        );
+      }
+      for dir in &deleted_dirs {
+        let _ = tx.execute("DELETE FROM file_index WHERE path = ?1", rusqlite::params![dir]);
+        let _ = tx.execute(
+          "DELETE FROM file_index WHERE path LIKE ?1",
+          rusqlite::params![format!("{}/%", dir)],
+        );
+      }
+      let _ = tx.commit();
+    }
+
+    // Pass 2 — walk only changed directories and insert their entries
+    'outer: for root in &roots {
+      if !root.exists() { continue; }
+      let walker = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+          if e.depth() == 0 { return true; }
+          if should_skip(e.path()) { return false; }
+          if e.file_type().is_dir() {
+            return changed_dirs.contains(e.path().to_str().unwrap_or(""));
+          }
+          true
+        });
+
+      for entry in walker {
+        if cancel.load(Ordering::Relaxed) { break 'outer; }
+        let entry = match entry { Ok(e) => e, Err(_) => continue };
+        if entry.depth() == 0 { continue; }
+
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+          Some(n) => n.to_string(), None => continue,
+        };
+        let path_str = path.to_string_lossy().to_string();
+        let is_dir = entry.file_type().is_dir() as i64;
+        let meta = entry.metadata().ok();
+        let size: Option<i64> = meta.as_ref().and_then(|m| if is_dir == 0 { Some(m.len() as i64) } else { None });
+        let modified_ms: Option<i64> = meta.as_ref().and_then(|m| {
+          m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as i64))
+        });
+
+        batch.push((name, path_str, is_dir, size, modified_ms));
+        total += 1;
+
+        if batch.len() >= 500 {
+          flush_batch(&conn, &mut batch);
+          let _ = app.emit("fm://index-progress", serde_json::json!({ "done": total }));
+        }
+      }
+    }
+    flush_batch(&conn, &mut batch);
+
+    // Update dir_mtime_cache
+    if let Ok(tx) = conn.unchecked_transaction() {
+      for dir in &changed_dirs {
+        if let Some(&mt) = new_dir_mtimes.get(dir) {
+          let _ = tx.execute(
+            "INSERT OR REPLACE INTO dir_mtime_cache(path, mtime_ms) VALUES (?1, ?2)",
+            rusqlite::params![dir, mt],
+          );
+        }
+      }
+      for dir in &deleted_dirs {
+        let _ = tx.execute("DELETE FROM dir_mtime_cache WHERE path = ?1", rusqlite::params![dir]);
+      }
+      let _ = tx.commit();
+    }
+
+    log::info!(
+      "indexer: incremental — {total} entries updated, {} dirs changed, {} dirs removed",
+      changed_dirs.len(), deleted_dirs.len()
+    );
+
+  } else {
+    // ── Full rebuild ─────────────────────────────────────────────────────────
+    let mut new_dir_mtimes: HashMap<String, i64> = HashMap::new();
+
+    'outer: for root in &roots {
+      if !root.exists() { continue; }
+      let walker = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| e.depth() == 0 || !should_skip(e.path()));
+
+      for entry in walker {
+        if cancel.load(Ordering::Relaxed) { break 'outer; }
+        let entry = match entry { Ok(e) => e, Err(_) => continue };
+        if entry.depth() == 0 { continue; }
+
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+          Some(n) => n.to_string(), None => continue,
+        };
+        let path_str = path.to_string_lossy().to_string();
+        let is_dir = entry.file_type().is_dir();
+
+        if is_dir {
+          new_dir_mtimes.insert(path_str.clone(), dir_mtime_ms(path));
+        }
+
+        let meta = entry.metadata().ok();
+        let size: Option<i64> = meta.as_ref().and_then(|m| if !is_dir { Some(m.len() as i64) } else { None });
+        let modified_ms: Option<i64> = meta.as_ref().and_then(|m| {
+          m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as i64))
+        });
+
+        batch.push((name, path_str, is_dir as i64, size, modified_ms));
+        total += 1;
+
+        if batch.len() >= 500 {
+          flush_batch(&conn, &mut batch);
+          let _ = app.emit("fm://index-progress", serde_json::json!({ "done": total }));
+        }
+      }
+    }
+    flush_batch(&conn, &mut batch);
+
+    // Write dir_mtime_cache
+    if let Ok(tx) = conn.unchecked_transaction() {
+      for (path, mt) in &new_dir_mtimes {
+        let _ = tx.execute(
+          "INSERT INTO dir_mtime_cache(path, mtime_ms) VALUES (?1, ?2)",
+          rusqlite::params![path, mt],
+        );
+      }
+      let _ = tx.commit();
+    }
+
+    log::info!("indexer: full rebuild — {total} entries indexed");
   }
 
-  flush_batch(&conn, &mut batch);
-
-  let now = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .map(|d| d.as_secs())
-    .unwrap_or(0);
+  // Write index_meta
+  let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
   let _ = conn.execute(
     "INSERT OR REPLACE INTO index_meta(key, value) VALUES ('last_indexed', ?1)",
     rusqlite::params![now.to_string()],
@@ -197,7 +349,5 @@ pub fn run_index(db_path: String, cancel: Arc<AtomicBool>, app: AppHandle) {
     "INSERT OR REPLACE INTO index_meta(key, value) VALUES ('file_count', ?1)",
     rusqlite::params![total.to_string()],
   );
-
   let _ = app.emit("fm://index-done", serde_json::json!({ "count": total }));
-  log::info!("indexer: complete — {total} entries indexed");
 }

@@ -74,6 +74,11 @@ fn bootstrap_db(db_path: &PathBuf) -> Result<(), String> {
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS dir_mtime_cache (
+        path     TEXT PRIMARY KEY,
+        mtime_ms INTEGER NOT NULL
+      );
       "#,
     )
     .map_err(|e| format!("failed to initialize db schema: {e}"))?;
