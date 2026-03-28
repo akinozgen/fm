@@ -57,19 +57,22 @@
       </div>
 
       <div v-if="indexStats" class="sv-stats">
-        <span v-if="indexStats.is_running" class="sv-stats-text">Indexing in progress…</span>
+        <span v-if="indexStats.is_running" class="sv-stats-text">
+          <RefreshCw :size="10" class="sv-spin sv-stats-spin" />
+          Indexing…
+        </span>
         <span v-else-if="indexStats.last_indexed" class="sv-stats-text">
           Indexed {{ formatAge(indexStats.last_indexed) }} ago · {{ indexStats.file_count.toLocaleString() }} files
         </span>
         <span v-else class="sv-stats-text">Index not yet built</span>
         <button
+          v-if="!indexStats.is_running"
           class="sv-reindex-btn"
-          :disabled="indexStats?.is_running"
-          :title="indexStats?.is_running ? 'Indexing in progress…' : 'Re-index filesystem'"
+          title="Re-index filesystem"
           @click="reindex"
         >
-          <RefreshCw :size="11" :class="{ 'sv-spin': indexStats?.is_running }" />
-          {{ indexStats?.is_running ? 'Indexing…' : 'Re-index' }}
+          <RefreshCw :size="11" />
+          Re-index
         </button>
       </div>
     </div>
@@ -77,8 +80,8 @@
     <!-- Results -->
     <div class="sv-results" @click="selectedPaths.clear(); selectedPaths = new Set()" @contextmenu.prevent="onBgContextMenu">
       <div v-if="!query.trim()" class="sv-empty">
-        <Search :size="32" class="sv-empty-icon" />
-        <span>Start typing to search</span>
+        <Search :size="22" class="sv-empty-icon" />
+        <span>Type to search files</span>
       </div>
 
       <div v-else-if="searching" class="sv-empty">
@@ -105,11 +108,10 @@
             @dblclick.stop="openItem(item)"
             @contextmenu.prevent.stop="onItemContextMenu(item, $event)"
           >
-            <FileIcon :path="item.path" :is-dir="item.is_dir" :size="16" />
+            <FileIcon :path="item.path" :is-dir="item.is_dir" :size="15" />
             <span class="name">{{ item.name }}</span>
-            <span class="meta">{{ item.is_dir ? 'Folder' : (item.ext ? item.ext.toUpperCase() : 'File') }}</span>
-            <span class="meta">{{ item.is_dir ? '—' : fmtSize(item.size) }}</span>
-            <span class="meta sv-location-meta">{{ parentDir(item.path) }}</span>
+            <span class="meta sv-size-meta">{{ item.is_dir ? '—' : fmtSize(item.size) }}</span>
+            <span class="meta sv-location-meta" :title="parentDir(item.path)">{{ parentDir(item.path) }}</span>
           </button>
         </section>
         <div v-if="results.length >= 200" class="sv-limit-note">
@@ -299,11 +301,11 @@ onMounted(async () => {
 /* ── Header ── */
 .sv-header {
   flex-shrink: 0;
-  padding: 12px 16px 10px;
+  padding: 10px 12px 8px;
   border-bottom: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
 }
 
 .sv-input-row {
@@ -312,9 +314,15 @@ onMounted(async () => {
   gap: 6px;
   background: var(--panel, #fff);
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   padding: 0 8px;
-  height: 30px;
+  height: 32px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.sv-input-row:focus-within {
+  border-color: #b0bcd8;
+  box-shadow: 0 0 0 2.5px rgba(100, 120, 200, 0.1);
 }
 
 .sv-search-icon {
@@ -393,9 +401,10 @@ onMounted(async () => {
 }
 
 .sv-scope-chip.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: rgba(59, 130, 246, 0.09);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: var(--accent);
+  font-weight: 500;
 }
 
 /* Path chips: folder icon + truncated name */
@@ -420,6 +429,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 20px;
 }
 
 .sv-stats-text {
@@ -428,7 +438,12 @@ onMounted(async () => {
   color: var(--muted);
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
+}
+
+.sv-stats-spin {
+  flex-shrink: 0;
+  opacity: 0.7;
 }
 
 .sv-reindex-btn {
@@ -472,14 +487,16 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   height: 100%;
-  gap: 10px;
+  gap: 8px;
   color: var(--muted);
-  font-size: 13px;
-  opacity: 0.6;
+  font-size: 12px;
+  opacity: 0.7;
 }
 
 .sv-empty-icon {
-  opacity: 0.4;
+  opacity: 0.3;
+  width: 24px;
+  height: 24px;
 }
 
 .sv-error {
@@ -490,19 +507,26 @@ onMounted(async () => {
   text-align: center;
 }
 
-/* Widen the last column to show parent path instead of fixed date width */
+/* 4-column layout: icon | name | size | path (type column removed — icon conveys type) */
 .sv-results-list .list-row {
-  grid-template-columns: 16px 1fr 80px 70px 1fr;
+  grid-template-columns: 15px 1fr 58px 1.4fr;
 }
 
 .sv-results-list {
   padding: 0 4px;
 }
 
+.sv-size-meta {
+  text-align: right;
+}
+
+/* Path: LTR text, but ellipsis clips from the left to show the specific end */
 .sv-location-meta {
   text-align: left !important;
   direction: rtl;
   unicode-bidi: plaintext;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .sv-limit-note {

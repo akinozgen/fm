@@ -1288,6 +1288,366 @@ fn write_text_file_cmd(path: String, content: String) -> Result<(), String> {
   Ok(())
 }
 
+// ── Archive listing ────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct ArchiveEntry {
+  name: String,
+  size: u64,
+  compressed_size: u64,
+  is_dir: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ArchiveListing {
+  entries: Vec<ArchiveEntry>,
+  total_count: usize,
+  truncated: bool,
+}
+
+fn detect_archive_fmt(path: &std::path::Path) -> Option<&'static str> {
+  let name = path.file_name()?.to_str()?.to_lowercase();
+  if name.ends_with(".tar.gz") || name.ends_with(".tgz")   { return Some("tar.gz");  }
+  if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") { return Some("tar.bz2"); }
+  if name.ends_with(".tar.xz") || name.ends_with(".txz")   { return Some("tar.xz");  }
+  if name.ends_with(".tar") { return Some("tar"); }
+  if name.ends_with(".zip") { return Some("zip"); }
+  None
+}
+
+fn collect_tar_entries<R: std::io::Read>(
+  mut archive: tar::Archive<R>,
+  entries: &mut Vec<ArchiveEntry>,
+  total_count: &mut usize,
+  limit: usize,
+) -> Result<(), String> {
+  let iter = archive.entries().map_err(|e| e.to_string())?;
+  for item in iter {
+    let Ok(entry) = item else { continue };
+    *total_count += 1;
+    if entries.len() < limit {
+      let name = entry
+        .path()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+      let size = entry.header().size().unwrap_or(0);
+      let is_dir = entry.header().entry_type().is_dir();
+      entries.push(ArchiveEntry { name, size, compressed_size: 0, is_dir });
+    }
+  }
+  Ok(())
+}
+
+#[tauri::command]
+fn list_archive_cmd(path: String) -> Result<ArchiveListing, String> {
+  const LIMIT: usize = 500;
+  let p = std::path::Path::new(&path);
+  let fmt = detect_archive_fmt(p).ok_or_else(|| "Unsupported archive format".to_string())?;
+
+  let mut entries: Vec<ArchiveEntry> = Vec::new();
+  let mut total_count = 0usize;
+
+  match fmt {
+    "zip" => {
+      let file = std::fs::File::open(p).map_err(|e| e.to_string())?;
+      let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+      total_count = archive.len();
+      for i in 0..archive.len().min(LIMIT) {
+        if let Ok(entry) = archive.by_index(i) {
+          entries.push(ArchiveEntry {
+            name: entry.name().to_string(),
+            size: entry.size(),
+            compressed_size: entry.compressed_size(),
+            is_dir: entry.is_dir(),
+          });
+        }
+      }
+    }
+    "tar" => {
+      let file = std::fs::File::open(p).map_err(|e| e.to_string())?;
+      collect_tar_entries(tar::Archive::new(file), &mut entries, &mut total_count, LIMIT)?;
+    }
+    "tar.gz" => {
+      let file = std::fs::File::open(p).map_err(|e| e.to_string())?;
+      let gz = flate2::read::GzDecoder::new(file);
+      collect_tar_entries(tar::Archive::new(gz), &mut entries, &mut total_count, LIMIT)?;
+    }
+    "tar.bz2" => {
+      let file = std::fs::File::open(p).map_err(|e| e.to_string())?;
+      let bz = bzip2::read::BzDecoder::new(file);
+      collect_tar_entries(tar::Archive::new(bz), &mut entries, &mut total_count, LIMIT)?;
+    }
+    "tar.xz" => {
+      let file = std::fs::File::open(p).map_err(|e| e.to_string())?;
+      let xz = xz2::read::XzDecoder::new(file);
+      collect_tar_entries(tar::Archive::new(xz), &mut entries, &mut total_count, LIMIT)?;
+    }
+    _ => return Err("Unsupported archive format".to_string()),
+  }
+
+  let truncated = total_count > LIMIT;
+  Ok(ArchiveListing { entries, total_count, truncated })
+}
+
+// ── ODF text extraction (ODT / ODP) ───────────────────────────────────────────
+
+#[tauri::command]
+fn extract_odt_text_cmd(path: String) -> Result<String, String> {
+  use std::io::Read;
+  use quick_xml::events::Event;
+
+  let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+  let mut zip = zip::ZipArchive::new(file)
+    .map_err(|_| "Not a valid ODF file".to_string())?;
+
+  let mut xml_content = {
+    let mut entry = zip.by_name("content.xml")
+      .map_err(|_| "content.xml not found — not a valid ODF file".to_string())?;
+    let mut s = String::new();
+    entry.read_to_string(&mut s).map_err(|e| e.to_string())?;
+    s
+  };
+
+  let mut out = String::new();
+  let mut reader = quick_xml::Reader::from_str(&xml_content);
+  reader.config_mut().trim_text(true);
+  let mut buf = Vec::new();
+  let mut in_para = false;
+
+  loop {
+    match reader.read_event_into(&mut buf) {
+      Ok(Event::Start(e)) => {
+        let local = e.local_name();
+        match local.as_ref() {
+          b"p" | b"h" => in_para = true,
+          _ => {}
+        }
+      }
+      Ok(Event::End(e)) => {
+        let local = e.local_name();
+        match local.as_ref() {
+          b"p" | b"h" => { out.push('\n'); in_para = false; }
+          _ => {}
+        }
+      }
+      Ok(Event::Empty(e)) => {
+        let local = e.local_name();
+        match local.as_ref() {
+          b"tab"        => { if in_para { out.push('\t'); } }
+          b"line-break" => { if in_para { out.push('\n'); } }
+          _ => {}
+        }
+      }
+      Ok(Event::Text(e)) if in_para => {
+        if let Ok(t) = e.unescape() { out.push_str(&t); }
+      }
+      Ok(Event::Eof) => break,
+      Err(_) => break,
+      _ => {}
+    }
+    buf.clear();
+  }
+
+  // suppress the borrow of xml_content after it was moved into the reader
+  let _ = &mut xml_content;
+  Ok(out.trim_end_matches('\n').to_string())
+}
+
+// ── ODS spreadsheet reading ────────────────────────────────────────────────────
+
+#[tauri::command]
+fn read_ods_cmd(path: String) -> Result<Vec<Vec<String>>, String> {
+  use std::io::Read;
+  use quick_xml::events::Event;
+  const MAX_REPEATED: usize = 50;
+
+  let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+  let mut zip = zip::ZipArchive::new(file)
+    .map_err(|_| "Not a valid ODS file".to_string())?;
+
+  let mut xml_content = {
+    let mut entry = zip.by_name("content.xml")
+      .map_err(|_| "content.xml not found".to_string())?;
+    let mut s = String::new();
+    entry.read_to_string(&mut s).map_err(|e| e.to_string())?;
+    s
+  };
+
+  let mut rows: Vec<Vec<String>> = Vec::new();
+  let mut current_row: Vec<String> = Vec::new();
+  let mut current_cell = String::new();
+  let mut cols_repeated: usize = 1;
+  let mut in_first_table = false;
+  let mut table_count: usize = 0;
+  let mut in_cell_text = false;
+
+  let mut reader = quick_xml::Reader::from_str(&xml_content);
+  reader.config_mut().trim_text(true);
+  let mut buf = Vec::new();
+
+  loop {
+    match reader.read_event_into(&mut buf) {
+      Ok(Event::Start(e)) => {
+        let local = e.local_name();
+        match local.as_ref() {
+          b"table" if table_count == 0 => {
+            table_count += 1;
+            in_first_table = true;
+          }
+          b"table-row" if in_first_table => {
+            current_row = Vec::new();
+          }
+          b"table-cell" if in_first_table => {
+            current_cell = String::new();
+            cols_repeated = 1;
+            in_cell_text = false;
+            for attr in e.attributes().flatten() {
+              if attr.key.local_name().as_ref() == b"number-columns-repeated" {
+                if let Ok(v) = attr.unescape_value() {
+                  cols_repeated = v.parse::<usize>().unwrap_or(1).min(MAX_REPEATED);
+                }
+              }
+            }
+          }
+          b"p" if in_first_table => { in_cell_text = true; }
+          _ => {}
+        }
+      }
+      Ok(Event::End(e)) => {
+        let local = e.local_name();
+        match local.as_ref() {
+          b"table" => { in_first_table = false; }
+          b"table-row" if in_first_table => {
+            while current_row.last().map_or(false, |s: &String| s.is_empty()) {
+              current_row.pop();
+            }
+            if !current_row.is_empty() {
+              rows.push(std::mem::take(&mut current_row));
+            }
+          }
+          b"table-cell" if in_first_table => {
+            let val = std::mem::take(&mut current_cell);
+            for _ in 0..cols_repeated { current_row.push(val.clone()); }
+            in_cell_text = false;
+          }
+          b"p" if in_first_table => { in_cell_text = false; }
+          _ => {}
+        }
+      }
+      Ok(Event::Empty(e)) => {
+        let local = e.local_name();
+        if local.as_ref() == b"table-cell" && in_first_table {
+          let mut repeated: usize = 1;
+          for attr in e.attributes().flatten() {
+            if attr.key.local_name().as_ref() == b"number-columns-repeated" {
+              if let Ok(v) = attr.unescape_value() {
+                repeated = v.parse::<usize>().unwrap_or(1).min(MAX_REPEATED);
+              }
+            }
+          }
+          for _ in 0..repeated { current_row.push(String::new()); }
+        }
+      }
+      Ok(Event::Text(e)) if in_cell_text && in_first_table => {
+        if let Ok(t) = e.unescape() { current_cell.push_str(&t); }
+      }
+      Ok(Event::Eof) => break,
+      Err(_) => break,
+      _ => {}
+    }
+    buf.clear();
+  }
+
+  let _ = &mut xml_content;
+  // trim trailing empty rows
+  while rows.last().map_or(false, |r: &Vec<String>| r.is_empty()) {
+    rows.pop();
+  }
+  Ok(rows)
+}
+
+/// Open a terminal emulator in the given directory (or the parent dir of a file).
+/// Tries popular terminals in preference order; falls back to the OS default.
+#[tauri::command]
+fn open_in_terminal_cmd(path: String) -> Result<(), String> {
+  use std::process::Command;
+
+  let p = std::path::PathBuf::from(&path);
+  let dir = if p.is_dir() {
+    p
+  } else {
+    p.parent()
+      .map(|d| d.to_path_buf())
+      .unwrap_or_else(|| std::path::PathBuf::from("/"))
+  };
+  let dir_str = dir.to_str().ok_or("invalid path encoding")?;
+
+  #[cfg(target_os = "macos")]
+  {
+    // Try modern terminals first; Terminal.app is the universal fallback.
+    let candidates: &[(&str, &str)] = &[
+      ("/Applications/Ghostty.app",   "Ghostty"),
+      ("/Applications/Warp.app",      "Warp"),
+      ("/Applications/iTerm.app",     "iTerm"),
+      ("/Applications/Alacritty.app", "Alacritty"),
+    ];
+    for (app_path, app_name) in candidates {
+      if std::path::Path::new(app_path).exists() {
+        return Command::new("open")
+          .args(["-a", app_name, dir_str])
+          .spawn()
+          .map(|_| ())
+          .map_err(|e| e.to_string());
+      }
+    }
+    Command::new("open")
+      .args(["-a", "Terminal", dir_str])
+      .spawn()
+      .map(|_| ())
+      .map_err(|e| e.to_string())
+  }
+
+  #[cfg(target_os = "windows")]
+  {
+    // Windows Terminal if available, otherwise plain cmd.
+    if Command::new("wt.exe").args(["-d", dir_str]).spawn().is_ok() {
+      return Ok(());
+    }
+    Command::new("cmd.exe")
+      .args(["/c", "start", "cmd.exe"])
+      .current_dir(&dir)
+      .spawn()
+      .map(|_| ())
+      .map_err(|e| e.to_string())
+  }
+
+  #[cfg(target_os = "linux")]
+  {
+    // (cmd, dir-flag)  — None means use process current_dir instead of a flag.
+    let candidates: &[(&str, Option<&str>)] = &[
+      ("gnome-terminal", Some("--working-directory")),
+      ("konsole",        Some("--workdir")),
+      ("xfce4-terminal", Some("--working-directory")),
+      ("kitty",          Some("--directory")),
+      ("alacritty",      Some("--working-directory")),
+      ("xterm",          None),
+    ];
+    for (cmd, dir_flag) in candidates {
+      let mut c = Command::new(cmd);
+      if let Some(flag) = dir_flag {
+        c.args([*flag, dir_str]);
+      } else {
+        c.current_dir(&dir);
+      }
+      if c.spawn().is_ok() {
+        return Ok(());
+      }
+    }
+    Err("no supported terminal emulator found".to_string())
+  }
+}
+
 #[tauri::command]
 fn open_editor_cmd(
   app: AppHandle,
@@ -1800,6 +2160,10 @@ pub fn run() {
       transfer::resume_transfer_cmd,
       read_text_file_cmd,
       write_text_file_cmd,
+      list_archive_cmd,
+      extract_odt_text_cmd,
+      read_ods_cmd,
+      open_in_terminal_cmd,
       open_editor_cmd,
       get_editor_path_cmd,
       watch_editor_file_cmd,

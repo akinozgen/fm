@@ -1,33 +1,48 @@
 <template>
   <div class="action-toolbar">
+
+    <!-- Selection segment: adapts based on whether anything is selected -->
+    <div class="action-segment selection-segment">
+      <template v-if="hasSelection">
+        <div class="selection-chip">
+          <CheckSquare :size="11" />
+          <span>{{ selectedCount }} selected</span>
+          <button class="chip-clear" title="Deselect all" @click="$emit('deselect-all')">
+            <X :size="10" />
+          </button>
+        </div>
+        <div class="segment-divider" />
+        <button class="op-btn op-btn-xs" title="Select all" @click="$emit('select-all')">All</button>
+        <button class="op-btn op-btn-xs" title="Invert selection" @click="$emit('select-inverse')">Invert</button>
+      </template>
+      <template v-else>
+        <button class="op-btn" title="Select all" @click="$emit('select-all')">
+          <Square :size="12" />
+          <span>Select All</span>
+        </button>
+      </template>
+    </div>
+
+    <!-- Clipboard actions -->
     <div class="action-segment">
-      <button class="op-btn" title="Select All" @click="$emit('select-all')">
-        <CheckSquare :size="13" />
-        <span>Select All</span>
+      <button class="op-btn op-btn-icon" title="Cut (⌘X)" aria-label="Cut" :disabled="!hasSelection" @click="$emit('cut')">
+        <Scissors :size="13" />
       </button>
-      <button class="op-btn" title="Deselect" @click="$emit('deselect-all')">
-        <Square :size="13" />
-        <span>Deselect</span>
+      <button class="op-btn op-btn-icon" title="Copy (⌘C)" aria-label="Copy" :disabled="!hasSelection" @click="$emit('copy')">
+        <Copy :size="13" />
       </button>
-      <button class="op-btn" title="Select Inverse" @click="$emit('select-inverse')">
-        <Shuffle :size="13" />
-        <span>Inverse</span>
+      <button class="op-btn op-btn-icon" title="Paste (⌘V)" aria-label="Paste" :disabled="!canPaste" @click="$emit('paste')">
+        <ClipboardPaste :size="13" />
       </button>
     </div>
+
+    <!-- Destructive action: visually isolated -->
     <div class="action-segment">
-      <button class="op-btn op-btn-icon" title="Cut" aria-label="Cut" :disabled="!hasSelection" @click="$emit('cut')">
-        <Scissors :size="14" />
-      </button>
-      <button class="op-btn op-btn-icon" title="Copy" aria-label="Copy" :disabled="!hasSelection" @click="$emit('copy')">
-        <Copy :size="14" />
-      </button>
-      <button class="op-btn op-btn-icon" title="Paste" aria-label="Paste" :disabled="!canPaste" @click="$emit('paste')">
-        <ClipboardPaste :size="14" />
-      </button>
-      <button class="op-btn op-btn-icon" title="Delete" aria-label="Delete" :disabled="!hasSelection" @click.stop.prevent="onDelete">
-        <Trash2 :size="14" />
+      <button class="op-btn op-btn-icon op-btn-danger" title="Delete" aria-label="Delete" :disabled="!hasSelection" @click.stop.prevent="onDelete">
+        <Trash2 :size="13" />
       </button>
     </div>
+
     <ViewOptionsDropdown
       :view-mode="viewMode"
       :show-hidden="showHidden"
@@ -52,9 +67,9 @@ import {
   ClipboardPaste,
   Copy,
   Scissors,
-  Shuffle,
   Square,
-  Trash2
+  Trash2,
+  X
 } from 'lucide-vue-next';
 import ViewOptionsDropdown from '@/components/ViewOptionsDropdown.vue';
 
@@ -86,5 +101,4 @@ defineEmits([
   'copy',
   'paste'
 ]);
-
 </script>

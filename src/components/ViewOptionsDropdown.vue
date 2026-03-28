@@ -1,97 +1,94 @@
 <template>
   <div ref="dropdownWrapRef" class="action-dropdown-wrap">
-    <button class="op-btn op-btn-dropdown op-btn-dropdown-icon" @click.stop="toggleMenu" title="View Options">
+    <button class="op-btn op-btn-dropdown op-btn-dropdown-icon" title="View Options" @click.stop="toggleMenu">
       <SlidersHorizontal :size="13" />
       <ChevronDown :size="12" />
     </button>
     <div v-if="menuOpen" class="op-dropdown" @click.stop>
-      <div class="op-view-toggle-wrap">
-        <button
-          type="button"
-          class="op-view-toggle-btn"
-          :class="{ active: viewMode === 'grid' }"
-          @click="$emit('update:view-mode', 'grid')"
-        >
-          <LayoutGrid :size="14" />
-          <span>Grid</span>
-        </button>
-        <button
-          type="button"
-          class="op-view-toggle-btn"
-          :class="{ active: viewMode === 'list' }"
-          @click="$emit('update:view-mode', 'list')"
-        >
-          <List :size="14" />
-          <span>List</span>
-        </button>
+
+      <!-- View mode: compact inline segmented control -->
+      <div class="op-row">
+        <span class="op-row-label">View</span>
+        <div class="op-seg">
+          <button
+            type="button"
+            class="op-seg-btn"
+            :class="{ active: viewMode === 'grid' }"
+            @click="$emit('update:view-mode', 'grid')"
+          >
+            <LayoutGrid :size="11" />
+            Grid
+          </button>
+          <button
+            type="button"
+            class="op-seg-btn"
+            :class="{ active: viewMode === 'list' }"
+            @click="$emit('update:view-mode', 'list')"
+          >
+            <List :size="11" />
+            List
+          </button>
+        </div>
       </div>
+
       <div class="op-divider"></div>
-      <div class="op-sort-section" style="padding-bottom: 2px">
-        <span class="op-sort-label">Display</span>
-      </div>
-      <label class="op-check">
-        <input
-          class="op-check-input"
-          type="checkbox"
-          :checked="showHidden"
-          @change="$emit('update:show-hidden', $event.target.checked)"
-        />
-        <span class="op-check-mark" aria-hidden="true"></span>
-        <span class="op-check-label">Show Hidden Files</span>
+
+      <!-- Display toggles -->
+      <label class="op-toggle-row">
+        <input type="checkbox" class="op-check-input" :checked="showHidden" @change="$emit('update:show-hidden', $event.target.checked)" />
+        <span class="op-toggle-label">Hidden Files</span>
+        <span class="op-switch" aria-hidden="true"></span>
       </label>
-      <label class="op-check">
-        <input
-          class="op-check-input"
-          type="checkbox"
-          :checked="showExtensions"
-          @change="$emit('update:show-extensions', $event.target.checked)"
-        />
-        <span class="op-check-mark" aria-hidden="true"></span>
-        <span class="op-check-label">Show File Extensions</span>
+      <label class="op-toggle-row">
+        <input type="checkbox" class="op-check-input" :checked="showExtensions" @change="$emit('update:show-extensions', $event.target.checked)" />
+        <span class="op-toggle-label">File Extensions</span>
+        <span class="op-switch" aria-hidden="true"></span>
       </label>
-      <label class="op-check">
-        <input
-          class="op-check-input"
-          type="checkbox"
-          :checked="showSelectionCheckboxes"
-          @change="$emit('update:show-selection-checkboxes', $event.target.checked)"
-        />
-        <span class="op-check-mark" aria-hidden="true"></span>
-        <span class="op-check-label">Show Selection Checkboxes</span>
+      <label class="op-toggle-row">
+        <input type="checkbox" class="op-check-input" :checked="showSelectionCheckboxes" @change="$emit('update:show-selection-checkboxes', $event.target.checked)" />
+        <span class="op-toggle-label">Selection Checkboxes</span>
+        <span class="op-switch" aria-hidden="true"></span>
       </label>
 
       <div class="op-divider"></div>
 
-      <div class="op-sort-section">
-        <span class="op-sort-label">Sort by</span>
-        <div class="op-sort-group">
+      <!-- Sort field -->
+      <div class="op-row">
+        <span class="op-row-label">Sort</span>
+        <div class="op-seg op-seg-sort">
           <button
             v-for="field in SORT_FIELDS"
             :key="field.value"
-            class="op-sort-btn"
+            class="op-seg-btn"
             :class="{ active: sortBy === field.value }"
             @click="$emit('update:sort-by', field.value)"
           >{{ field.label }}</button>
         </div>
-        <div class="op-sort-dir">
+      </div>
+
+      <!-- Sort direction -->
+      <div class="op-row">
+        <span class="op-row-label">Order</span>
+        <div class="op-seg">
           <button
-            class="op-sort-dir-btn"
+            class="op-seg-btn"
             :class="{ active: sortDir === 'asc' }"
             @click="$emit('update:sort-dir', 'asc')"
           >
-            <ArrowUpNarrowWide :size="12" />
-            Ascending
+            <ArrowUpNarrowWide :size="11" />
+            Asc
           </button>
           <button
-            class="op-sort-dir-btn"
+            class="op-seg-btn"
             :class="{ active: sortDir === 'desc' }"
             @click="$emit('update:sort-dir', 'desc')"
           >
-            <ArrowDownWideNarrow :size="12" />
-            Descending
+            <ArrowDownWideNarrow :size="11" />
+            Desc
           </button>
         </div>
       </div>
+
     </div>
   </div>
 </template>

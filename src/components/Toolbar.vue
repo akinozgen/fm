@@ -1,9 +1,9 @@
 <template>
   <div class="toolbar" data-tauri-drag-region>
     <div class="nav-group">
-      <button class="icon-btn" title="Back" @click="$emit('navigate-back')"><ChevronLeft :size="14" /></button>
-      <button class="icon-btn" title="Forward" @click="$emit('navigate-forward')"><ChevronRight :size="14" /></button>
-      <button class="icon-btn" title="Up" @click="$emit('navigate-up')"><ArrowUp :size="14" /></button>
+      <button class="icon-btn" title="Back" :disabled="!canGoBack" @click="$emit('navigate-back')"><ChevronLeft :size="14" /></button>
+      <button class="icon-btn" title="Forward" :disabled="!canGoForward" @click="$emit('navigate-forward')"><ChevronRight :size="14" /></button>
+      <button class="icon-btn" title="Parent Folder" :disabled="!canGoUp" @click="$emit('navigate-up')"><ArrowUp :size="14" /></button>
     </div>
     <AddressBar
       ref="addressBarRef"
@@ -109,6 +109,18 @@ const props = defineProps({
   indexDone: {
     type: Number,
     default: 0,
+  },
+  canGoBack: {
+    type: Boolean,
+    default: false,
+  },
+  canGoForward: {
+    type: Boolean,
+    default: false,
+  },
+  canGoUp: {
+    type: Boolean,
+    default: false,
   },
 });
 

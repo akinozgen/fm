@@ -19,6 +19,14 @@
         <button
           type="button"
           class="titlebar-btn"
+          title="Keyboard Shortcuts"
+          @click.stop="shortcutsOpen = true"
+        >
+          <CircleHelp :size="14" />
+        </button>
+        <button
+          type="button"
+          class="titlebar-btn"
           title="New file or folder"
           @click.stop="onNewItemClick($event)"
         >
@@ -47,6 +55,9 @@
         :transfer-jobs="transferJobs"
         :indexing="indexing"
         :index-done="indexDone"
+        :can-go-back="canGoBack"
+        :can-go-forward="canGoForward"
+        :can-go-up="canGoUp"
         @navigate-up="navigateUp"
         @navigate-back="navigateBack"
         @navigate-forward="navigateForward"
@@ -152,6 +163,7 @@
       <DetailsPane :entries="propertiesEntries" @close="propertiesEntries = []" />
     </main>
   </div>
+  <KeyboardShortcutsModal :open="shortcutsOpen" @close="shortcutsOpen = false" />
 </template>
 
 <script setup>
@@ -194,9 +206,10 @@ import {
   isWelcomePath,
   normalizePath
 } from './lib/virtualPaths';
-import { FolderOpen, Plus, Search } from 'lucide-vue-next';
+import { CircleHelp, FolderOpen, Plus, Search } from 'lucide-vue-next';
 import Sidebar from './components/Sidebar.vue';
 import Toolbar from './components/Toolbar.vue';
+import KeyboardShortcutsModal from './components/KeyboardShortcutsModal.vue';
 import WelcomePage from './components/WelcomePage.vue';
 import WinControls from './components/WinControls.vue';
 import SearchView from './components/SearchView.vue';
@@ -231,10 +244,15 @@ const indexing         = ref(false);
 const indexDone        = ref(0);
 const lastRealPath     = ref('');
 const searchResultCount = ref(0);
+const shortcutsOpen     = ref(false);
 
 const pathHistory = ref([]);
 const historyIndex = ref(-1);
 const unlistenFns = [];
+
+const canGoBack    = computed(() => historyIndex.value > 0);
+const canGoForward = computed(() => historyIndex.value < pathHistory.value.length - 1);
+const canGoUp      = computed(() => !showWelcome.value && !!currentPath.value && !isWelcomePath(currentPath.value));
 
 let resizing = false;
 let teardownKeybindings = () => {};
@@ -1039,6 +1057,9 @@ async function hookEvents() {
         return { path: p, name, is_dir: isDir, ext: null, size: null, modified_ms: null };
       }).filter(Boolean);
       propertiesEntries.value = found;
+    } else if (action === 'open_terminal') {
+      const target = singlePath ?? currentPath.value;
+      if (target) void invoke('open_in_terminal_cmd', { path: target });
     } else if (action === 'edit') {
       if (singlePath) void invoke('open_editor_cmd', { path: singlePath });
     } else if (action === 'mount') {

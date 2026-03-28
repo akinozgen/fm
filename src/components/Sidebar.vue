@@ -7,8 +7,8 @@
         class="tree-group"
       >
         <button class="tree-section" @click="toggleSection(section.title)">
-          <ChevronDown v-if="!collapsed[section.title]" :size="12" />
-          <ChevronRight v-else :size="12" />
+          <ChevronDown v-if="!collapsed[section.title]" :size="11" class="tree-section-chevron" />
+          <ChevronRight v-else :size="11" class="tree-section-chevron" />
           <span>{{ section.title }}</span>
         </button>
         <div v-if="!collapsed[section.title]" class="tree-items">
@@ -30,8 +30,8 @@
             @dragleave="onPinnedDragLeave($event, item)"
             @drop.prevent="item.kind === 'pinned' && onPinnedDrop($event, item, section)"
           >
-            <component :is="resolveIcon(item)" :size="14" />
-            <span class="tree-item-label">{{ driveDisplayText(item) }}</span>
+            <component :is="resolveIcon(item)" :size="13" />
+            <span class="tree-item-label" :title="isDriveItem(item) ? item.path : undefined">{{ driveDisplayText(item) }}</span>
             <button
               v-if="item.kind === 'pinned'"
               type="button"
@@ -100,9 +100,14 @@ function toggleSection(title) {
   collapsed[title] = !collapsed[title];
 }
 
+function isDriveItem(item) {
+  return item.kind === 'device' || item.kind === 'device_removable';
+}
+
 function driveDisplayText(item) {
-  if (item.kind === 'device' || item.kind === 'device_removable') {
-    return `${item.path} ${item.label}`.trim();
+  if (isDriveItem(item)) {
+    // Show label only (e.g. "Root (460 GB)"); full path available as tooltip
+    return item.label || item.path;
   }
   return item.label;
 }

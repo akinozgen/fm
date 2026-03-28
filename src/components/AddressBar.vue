@@ -1,5 +1,5 @@
 <template>
-  <div ref="pathbarRef" class="pathbar" @contextmenu.prevent="openAddressMenu" @click="onPathbarClick">
+  <div ref="pathbarRef" class="pathbar" :class="{ 'pathbar-editable': !isEditing }" @contextmenu.prevent="openAddressMenu" @click="onPathbarClick">
     <div class="pathbar-content">
       <template v-if="!isEditing">
         <!-- Head: always-visible leading crumbs -->
