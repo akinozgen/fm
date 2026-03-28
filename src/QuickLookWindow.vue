@@ -804,6 +804,23 @@ onBeforeUnmount(() => {
   word-break: break-word;
 }
 
+.ql-value[contenteditable] {
+  outline: none;
+  border: none;
+  background: transparent;
+  caret-color: transparent;
+  cursor: text;
+}
+
+.ql-value[contenteditable]:focus,
+.ql-value[contenteditable]:hover,
+.ql-value[contenteditable]:active {
+  outline: none;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
 .ql-path {
   color: var(--muted);
   white-space: nowrap;

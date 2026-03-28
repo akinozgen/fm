@@ -38,6 +38,10 @@
           class="rename-input grid-rename-input"
           type="text"
           v-model="renameValue"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
           @mousedown.stop
           @click.stop
           @dblclick.stop
@@ -79,6 +83,10 @@
           class="rename-input list-rename-input"
           type="text"
           v-model="renameValue"
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
           @mousedown.stop
           @click.stop
           @dblclick.stop

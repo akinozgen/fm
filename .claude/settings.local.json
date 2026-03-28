@@ -9,7 +9,18 @@
       "Bash(du:*)",
       "Bash(npm install:*)",
       "Bash(node -e \"const m = require\\(''./node_modules/@codemirror/merge/dist/index.cjs''\\); console.log\\(''MergeView:'', typeof m.MergeView\\)\")",
-      "Bash(node -e \"const s = require\\(''./node_modules/@codemirror/search/dist/index.cjs''\\); console.log\\(''openSearchPanel:'', typeof s.openSearchPanel\\)\")"
+      "Bash(node -e \"const s = require\\(''./node_modules/@codemirror/search/dist/index.cjs''\\); console.log\\(''openSearchPanel:'', typeof s.openSearchPanel\\)\")",
+      "Bash(grep -v \"^$\\\\|Compiling\\\\|Checking\\\\|Downloading\\\\|parse error\\\\| --> \")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(node -e \"const p=require\\(''''/Users/ozgen/src/fm/package.json''''\\); console.log\\(''''node engines:'''', p.engines\\); console.log\\(''''tauri-cli:'''', p.devDependencies?.[''''@tauri-apps/cli'''']\\)\")",
+      "Bash(node:*)",
+      "Bash(git push:*)",
+      "Bash(cp ~/Downloads/folder.png /Users/ozgen/src/fm/src-tauri/icons/icon.png)",
+      "Bash(npx tauri:*)",
+      "Bash(grep -n \"createEditor\\\\|languageCompartment\\\\|languageExtension\\\\|languageName\\\\|getLanguage\" /Users/ozgen/src/fm/src/lib/*.js)",
+      "Bash(grep:*)",
+      "Bash(ls:*)"
     ]
   }
 }
