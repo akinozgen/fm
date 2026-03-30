@@ -37,7 +37,6 @@ body * {
 
 .app-shell,
 .sidebar,
-.toolbar,
 .details,
 .treeview,
 .list,
@@ -60,167 +59,129 @@ body * {
   background: var(--bg);
 }
 
+/* ── Unified titlebar (brand + nav + addressbar + actions) ─────────────────── */
 .app-titlebar {
   grid-column: 1 / -1;
   grid-row: 1;
-  display: grid;
-  grid-template-columns: 1fr minmax(0, 2fr) 1fr;
+  display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 36px;
-  padding: 0 0 0 12px;
+  gap: 4px;
+  min-height: 44px;
+  padding: 0 8px 0 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
+  position: relative;
+  z-index: 10;
 }
 
-.titlebar-left {
-  display: flex;
-  align-items: center;
-  min-width: 0;
+/* macOS: reserve space for traffic lights */
+.app-shell[data-platform="macos"] .app-titlebar {
+  min-height: 40px;
+  padding-left: 80px;
 }
-
-.titlebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  margin: 0 -4px 0 -2px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.titlebar-brand:hover {
-  background: var(--panel-muted);
-}
-
-.titlebar-brand-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-}
-
-.titlebar-brand-name {
-  font-weight: 600;
-  font-size: 13px;
-  letter-spacing: 0.2px;
-  font-family: "JetBrains Mono", "Iosevka", "SFMono-Regular", Menlo, monospace;
-}
-
-.titlebar-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-}
-
-.titlebar-path-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 200px;
-  max-width: 40%;
-  padding: 0 8px 0 10px;
-  background: var(--panel-muted);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.titlebar-path-wrap .titlebar-path {
-  flex: 1;
-  min-width: 0;
-  text-align: center;
-}
-
-.titlebar-path {
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.titlebar-path-search {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-}
-
-.titlebar-path-search:hover {
-  background: var(--panel);
-  color: var(--ink);
-}
-
-.titlebar-right {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  min-width: 0;
-}
-
-.titlebar-btn {
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-}
-
-.titlebar-btn:hover {
-  background: var(--panel-muted);
-  color: var(--ink);
-}
-
-
-.titlebar-btn.active {
-  background: var(--panel-muted);
-  color: var(--ink);
-}
-
-.titlebar-win-controls {
-  display: flex;
-  align-items: center;
-  padding-left: 8px;
-  margin-left: 4px;
-  border-left: 1px solid var(--line);
-  padding-right: 10px;
-}
-
-/* macOS: native traffic lights sol üstte; kendi kontrollerimizi gizle, fm butonunu sağa kaydır */
 .app-shell[data-platform="macos"] .titlebar-win-controls {
   display: none;
 }
 
-.app-shell[data-platform="macos"] .app-titlebar {
-  min-height: 28px;
+/* Brand */
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  padding: 4px 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s;
+}
+.titlebar-brand:hover { background: var(--panel-muted); }
+
+.titlebar-brand-name {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05px;
+  font-family: "JetBrains Mono", "Iosevka", "SFMono-Regular", Menlo, monospace;
+  color: var(--ink);
 }
 
-.app-shell[data-platform="macos"] .titlebar-left {
-  padding-left: 72px;
+/* Navigation group: ‹ › ↑ */
+.titlebar-nav-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  background: var(--panel-muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  flex-shrink: 0;
 }
+
+.titlebar-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.titlebar-nav-btn:hover:not(:disabled) { background: rgba(0,0,0,0.06); }
+.titlebar-nav-btn:active:not(:disabled) { background: rgba(0,0,0,0.1); }
+.titlebar-nav-btn:disabled { opacity: 0.28; cursor: default; pointer-events: none; }
+
+/* Address bar — fills remaining space */
+.titlebar-address { flex: 1; min-width: 0; }
+
+/* Right-side icon buttons: search, help, new */
+.titlebar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+.titlebar-btn:hover { background: var(--panel-muted); color: var(--ink); }
+
+/* Window controls (non-macOS) */
+.titlebar-win-controls {
+  display: flex;
+  align-items: center;
+  margin-left: 4px;
+  padding-left: 8px;
+  padding-right: 4px;
+  border-left: 1px solid var(--line);
+}
+
+/* Transfer progress widget */
+.titlebar-transfer-wrap { position: relative; flex-shrink: 0; }
+.titlebar-transfer-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.titlebar-transfer-btn:hover { background: var(--panel-muted); }
 
 .app-shell .sidebar {
   grid-row: 2;
@@ -463,7 +424,7 @@ body * {
 .main {
   position: relative;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
   min-width: 0;
   min-height: 0;
   background: var(--panel);
@@ -474,24 +435,20 @@ body * {
   background: var(--bg);
 }
 
-.main > .toolbar {
+.main > .action-toolbar {
   grid-row: 1;
 }
 
-.main > .action-toolbar {
+.main > .content {
   grid-row: 2;
 }
 
-.main > .content {
-  grid-row: 3;
-}
-
 .main > .welcome-page {
-  grid-row: 3;
+  grid-row: 2;
 }
 
 .main > .statusbar {
-  grid-row: 4;
+  grid-row: 3;
 }
 
 /* ── Properties pane ─────────────────────────────────────────────────── */
@@ -651,16 +608,6 @@ body * {
 .props-slide-enter-from,
 .props-slide-leave-to {
   transform: translateX(100%);
-}
-
-.toolbar {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
-  align-items: center;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
 }
 
 .action-toolbar {
@@ -946,57 +893,6 @@ body * {
   height: 1px;
   background: #e8e9ef;
   margin: 3px 0;
-}
-
-.nav-group,
-.view-group {
-  display: flex;
-  gap: 2px;
-  align-items: center;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-muted);
-}
-
-.icon-btn,
-.pill-btn {
-  border: 1px solid transparent;
-  background: transparent;
-  border-radius: 6px;
-  padding: 0;
-  height: 24px;
-  min-width: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #3a4050;
-  font-size: 12px;
-}
-
-.pill-btn.active {
-  background: #d9e7ff;
-  color: #1d4f92;
-  border-color: #b6ccef;
-}
-
-.icon-btn:hover,
-.pill-btn:hover {
-  background: #e5e8ef;
-  border-color: #d2d7e1;
-}
-
-.icon-btn:active,
-.pill-btn:active {
-  background: #d9dde7;
-  border-color: #c8cfdb;
-}
-
-.icon-btn:disabled,
-.pill-btn:disabled {
-  opacity: 0.3;
-  cursor: default;
-  pointer-events: none;
 }
 
 .pathbar {

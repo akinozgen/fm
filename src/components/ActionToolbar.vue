@@ -45,12 +45,14 @@
 
     <ViewOptionsDropdown
       :view-mode="viewMode"
+      :grid-zoom="gridZoom"
       :show-hidden="showHidden"
       :show-extensions="showExtensions"
       :show-selection-checkboxes="showSelectionCheckboxes"
       :sort-by="sortBy"
       :sort-dir="sortDir"
       @update:view-mode="$emit('update:view-mode', $event)"
+      @update:grid-zoom="$emit('update:grid-zoom', $event)"
       @update:show-hidden="$emit('update:show-hidden', $event)"
       @update:show-extensions="$emit('update:show-extensions', $event)"
       @update:show-selection-checkboxes="$emit('update:show-selection-checkboxes', $event)"
@@ -78,6 +80,7 @@ const props = defineProps({
   showExtensions: { type: Boolean, required: true },
   showSelectionCheckboxes: { type: Boolean, required: true },
   viewMode: { type: String, required: true },
+  gridZoom: { type: Number, default: 110 },
   selectedCount: { type: Number, default: 0 },
   sortBy: { type: String, default: 'name' },
   sortDir: { type: String, default: 'asc' },
@@ -92,6 +95,7 @@ defineEmits([
   'update:show-extensions',
   'update:show-selection-checkboxes',
   'update:view-mode',
+  'update:grid-zoom',
   'update:sort-by',
   'update:sort-dir',
   'select-all',

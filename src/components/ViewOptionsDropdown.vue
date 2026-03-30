@@ -31,6 +31,31 @@
         </div>
       </div>
 
+      <!-- Grid size (only shown in grid mode) -->
+      <div v-if="viewMode === 'grid'" class="op-row">
+        <span class="op-row-label">Size</span>
+        <div class="op-seg">
+          <button
+            type="button"
+            class="op-seg-btn"
+            :class="{ active: gridSizeLabel === 'S' }"
+            @click="$emit('update:grid-zoom', GRID_SIZE_S)"
+          >S</button>
+          <button
+            type="button"
+            class="op-seg-btn"
+            :class="{ active: gridSizeLabel === 'M' }"
+            @click="$emit('update:grid-zoom', GRID_SIZE_M)"
+          >M</button>
+          <button
+            type="button"
+            class="op-seg-btn"
+            :class="{ active: gridSizeLabel === 'L' }"
+            @click="$emit('update:grid-zoom', GRID_SIZE_L)"
+          >L</button>
+        </div>
+      </div>
+
       <div class="op-divider"></div>
 
       <!-- Display toggles -->
@@ -94,7 +119,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
@@ -111,8 +136,13 @@ const SORT_FIELDS = [
   { value: 'modified', label: 'Date' },
 ];
 
-defineProps({
+const GRID_SIZE_S = 88;
+const GRID_SIZE_M = 128;
+const GRID_SIZE_L = 176;
+
+const props = defineProps({
   viewMode: { type: String, required: true },
+  gridZoom: { type: Number, default: 110 },
   showHidden: { type: Boolean, required: true },
   showExtensions: { type: Boolean, required: true },
   showSelectionCheckboxes: { type: Boolean, required: true },
@@ -122,12 +152,20 @@ defineProps({
 
 defineEmits([
   'update:view-mode',
+  'update:grid-zoom',
   'update:show-hidden',
   'update:show-extensions',
   'update:show-selection-checkboxes',
   'update:sort-by',
   'update:sort-dir',
 ]);
+
+// Map continuous zoom value to the nearest S/M/L bucket for active indicator
+const gridSizeLabel = computed(() => {
+  if (props.gridZoom < 108) return 'S';
+  if (props.gridZoom < 152) return 'M';
+  return 'L';
+});
 
 const menuOpen = ref(false);
 const dropdownWrapRef = ref(null);

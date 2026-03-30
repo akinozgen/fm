@@ -67,9 +67,7 @@
               </div>
             </button>
             <button class="wp-eject-btn" title="Unmount" @click.stop="unmount(item.path)">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M2 9.5h8M6 1.5 2 7h8L6 1.5Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
+              <Unplug :size="12" />
             </button>
           </div>
         </div>
@@ -81,7 +79,7 @@
 
 <script setup>
 import { computed } from 'vue';
-import { Download, FileText, Folder, HardDrive, Home, Music, PictureInPicture2, Trash2, Usb, Video } from 'lucide-vue-next';
+import { Download, FileText, Folder, HardDrive, Home, Music, PictureInPicture2, Trash2, Unplug, Usb, Video } from 'lucide-vue-next';
 import { invoke } from '@tauri-apps/api/core';
 
 const props = defineProps({

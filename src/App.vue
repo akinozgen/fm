@@ -1,40 +1,77 @@
 <template>
   <div class="app-shell" :data-platform="platformData">
-    <header class="app-titlebar" data-tauri-drag-region @mousedown="onTitlebarMousedown">
-      <div class="titlebar-left">
-        <button type="button" class="titlebar-brand" title="Home" @click="openWelcome">
-          <span class="titlebar-brand-icon"><FolderOpen :size="14" /></span>
-          <span class="titlebar-brand-name">fm</span>
+    <header class="app-titlebar" data-tauri-drag-region @mousedown="onTitlebarMousedown" @click.capture="onTitlebarClick">
+      <button type="button" class="titlebar-brand" title="Home" @click="openWelcome">
+        <span class="titlebar-brand-name">fm</span>
+      </button>
+      <div class="titlebar-nav-group">
+        <button class="titlebar-nav-btn" title="Back (Alt+←)" :disabled="!canGoBack" @click="navigateBack">
+          <ChevronLeft :size="13" />
+        </button>
+        <button class="titlebar-nav-btn" title="Forward (Alt+→)" :disabled="!canGoForward" @click="navigateForward">
+          <ChevronRight :size="13" />
+        </button>
+        <button class="titlebar-nav-btn" title="Parent Folder" :disabled="!canGoUp" @click="navigateUp">
+          <ArrowUp :size="13" />
         </button>
       </div>
-      <div class="titlebar-center">
-        <div class="titlebar-path-wrap">
-          <span class="titlebar-path" :title="currentPath">{{ titleBarLocationLabel }}</span>
-          <button type="button" class="titlebar-path-search" title="Search (F6)" @click="navigateTo(FM_SEARCH)">
-            <Search :size="14" />
-          </button>
+      <AddressBar
+        ref="addressBarRef"
+        class="titlebar-address"
+        :current-path="currentPath"
+        :folder-entries="entries"
+        :manual-history="manualPathHistory"
+        @navigate="navigateTo"
+        @navigate-manual="navigateToFromManual"
+        @delete-manual-history="deleteManualHistoryPath"
+        @open-failed="onAddressBarOpenFailed"
+        @open-path="openFile"
+      />
+      <IndexBar
+        :indexing="indexing"
+        :index-done="indexDone"
+        @cancel="invoke('cancel_index_cmd')"
+      />
+      <div v-if="transferJobs.length > 0" ref="transferWrapRef" class="titlebar-transfer-wrap">
+        <button
+          class="titlebar-transfer-btn"
+          title="Transfer in progress"
+          @click.stop="transferPopoutOpen = !transferPopoutOpen"
+        >
+          <svg class="transfer-progress-ring" viewBox="0 0 24 24" aria-hidden="true">
+            <circle class="transfer-progress-bg"   cx="12" cy="12" r="10" fill="none" stroke-width="2" />
+            <circle class="transfer-progress-fill" cx="12" cy="12" r="10" fill="none" stroke-width="2"
+              :stroke-dasharray="circumference" :stroke-dashoffset="strokeOffset" />
+          </svg>
+          <Copy     v-if="!firstJob || firstJob.op !== 'move'" :size="11" class="transfer-progress-icon" />
+          <Scissors v-else :size="11" class="transfer-progress-icon" />
+        </button>
+        <div v-if="transferPopoutOpen" class="transfer-popout" @click.stop>
+          <div class="transfer-popout-list">
+            <TransferBar
+              v-for="job in transferJobs"
+              :key="job.id"
+              :active="true"
+              :paused="job.paused"
+              :progress="job"
+              @cancel="onCancelTransfer(job.id)"
+              @pause="onPauseTransfer(job.id)"
+              @resume="onResumeTransfer(job.id)"
+            />
+          </div>
         </div>
       </div>
-      <div class="titlebar-right">
-        <button
-          type="button"
-          class="titlebar-btn"
-          title="Keyboard Shortcuts"
-          @click.stop="shortcutsOpen = true"
-        >
-          <CircleHelp :size="14" />
-        </button>
-        <button
-          type="button"
-          class="titlebar-btn"
-          title="New file or folder"
-          @click.stop="onNewItemClick($event)"
-        >
-          <Plus :size="14" />
-        </button>
-        <div class="titlebar-win-controls">
-          <WinControls />
-        </div>
+      <button type="button" class="titlebar-btn" title="Search (F6)" @click="navigateTo(FM_SEARCH)">
+        <Search :size="13" />
+      </button>
+      <button type="button" class="titlebar-btn" title="Keyboard Shortcuts" @click.stop="shortcutsOpen = true">
+        <CircleHelp :size="13" />
+      </button>
+      <button type="button" class="titlebar-btn" title="New file or folder" @click.stop="onNewItemClick($event)">
+        <Plus :size="13" />
+      </button>
+      <div class="titlebar-win-controls">
+        <WinControls />
       </div>
     </header>
     <Sidebar
@@ -47,30 +84,6 @@
       @unmount="onUnmountDrive"
     />
     <main class="main">
-      <Toolbar
-        ref="toolbarRef"
-        :current-path="currentPath"
-        :folder-entries="entries"
-        :manual-history="manualPathHistory"
-        :transfer-jobs="transferJobs"
-        :indexing="indexing"
-        :index-done="indexDone"
-        :can-go-back="canGoBack"
-        :can-go-forward="canGoForward"
-        :can-go-up="canGoUp"
-        @navigate-up="navigateUp"
-        @navigate-back="navigateBack"
-        @navigate-forward="navigateForward"
-        @navigate-path="navigateTo"
-        @navigate-path-manual="navigateToFromManual"
-        @delete-manual-history="deleteManualHistoryPath"
-        @open-failed="onAddressBarOpenFailed"
-        @open-path="openFile"
-        @cancel-transfer="onCancelTransfer"
-        @pause-transfer="onPauseTransfer"
-        @resume-transfer="onResumeTransfer"
-        @cancel-index="invoke('cancel_index_cmd')"
-      />
       <TrashToolbar
         v-if="!showWelcome && isTrashView"
         :selected-count="selectedEntries.length"
@@ -79,6 +92,7 @@
         :show-extensions="showExtensions"
         :show-selection-checkboxes="showSelectionCheckboxes"
         :view-mode="viewMode"
+        :grid-zoom="gridZoom"
         :sort-by="sortBy"
         :sort-dir="sortDir"
         :on-delete="deleteSelected"
@@ -90,6 +104,7 @@
         @update:show-extensions="setShowExtensions"
         @update:show-selection-checkboxes="setShowSelectionCheckboxes"
         @update:view-mode="onViewModeChange"
+        @update:grid-zoom="onGridZoomChange"
         @update:sort-by="setSortBy"
         @update:sort-dir="setSortDir"
       />
@@ -99,6 +114,7 @@
         :show-extensions="showExtensions"
         :show-selection-checkboxes="showSelectionCheckboxes"
         :view-mode="viewMode"
+        :grid-zoom="gridZoom"
         :selected-count="selectedEntries.length"
         :sort-by="sortBy"
         :sort-dir="sortDir"
@@ -108,6 +124,7 @@
         @update:show-extensions="setShowExtensions"
         @update:show-selection-checkboxes="setShowSelectionCheckboxes"
         @update:view-mode="onViewModeChange"
+        @update:grid-zoom="onGridZoomChange"
         @update:sort-by="setSortBy"
         @update:sort-dir="setSortDir"
         @select-all="selectAll"
@@ -124,7 +141,7 @@
       />
       <SearchView
         v-else-if="isSearchPath(currentPath)"
-        style="grid-row: 3; min-height: 0;"
+        style="grid-row: 2; min-height: 0;"
         :current-path="lastRealPath"
         @navigate="navigateTo"
         @open-file="openFile"
@@ -198,17 +215,17 @@ import {
   FM_SEARCH,
   canonicalizePath,
   createDraftPath,
-  getVirtualPathLabel,
   isDraftPath,
   isSearchPath,
   isTrashPath,
-  isVirtualPath,
   isWelcomePath,
   normalizePath
 } from './lib/virtualPaths';
-import { CircleHelp, FolderOpen, Plus, Search } from 'lucide-vue-next';
+import { ArrowUp, ChevronLeft, ChevronRight, CircleHelp, Copy, Plus, Scissors, Search } from 'lucide-vue-next';
+import AddressBar from './components/AddressBar.vue';
+import IndexBar from './components/IndexBar.vue';
+import TransferBar from './components/TransferBar.vue';
 import Sidebar from './components/Sidebar.vue';
-import Toolbar from './components/Toolbar.vue';
 import KeyboardShortcutsModal from './components/KeyboardShortcutsModal.vue';
 import WelcomePage from './components/WelcomePage.vue';
 import WinControls from './components/WinControls.vue';
@@ -232,7 +249,9 @@ const showSelectionCheckboxes = ref(false);
 const showWelcome = ref(true);
 const manualPathHistory = ref([]);
 const mainContentRef = ref(null);
-const toolbarRef = ref(null);
+const addressBarRef  = ref(null);
+const transferWrapRef = ref(null);
+const transferPopoutOpen = ref(false);
 const propertiesEntries = ref([]);
 const selectedPaths = ref([]);
 
@@ -310,16 +329,20 @@ const selectionSizeBytes = computed(() => {
 const isTrashView = computed(() => isTrashPath(currentPath.value));
 const canEmptyTrash = computed(() => isTrashView.value && entries.value.length > 0);
 
-const titleBarLocationLabel = computed(() => {
-  const normalized = normalizePath(currentPath.value);
-  if (!normalized) return 'No location';
-  if (isVirtualPath(normalized)) {
-    return getVirtualPathLabel(normalized) || normalized;
-  }
-  const parts = normalized.split('/').filter(Boolean);
-  if (parts.length === 0) return '/';
-  return parts[parts.length - 1];
+// ── Transfer progress (lifted from Toolbar) ───────────────────────────────────
+const CIRCUMFERENCE = 2 * Math.PI * 10;
+const firstJob = computed(() => transferJobs.value[0] ?? null);
+const fillPct  = computed(() => {
+  const job = firstJob.value;
+  if (!job) return 0;
+  const { bytes_done = 0, bytes_total = 0, done = 0, total = 0 } = job;
+  if (bytes_total > 0) return Math.min(100, Math.round((bytes_done / bytes_total) * 100));
+  return total > 0 ? Math.round((done / total) * 100) : 0;
 });
+const circumference = CIRCUMFERENCE;
+const strokeOffset  = computed(() => CIRCUMFERENCE * (1 - fillPct.value / 100));
+// ─────────────────────────────────────────────────────────────────────────────
+
 
 function startResize(event) {
   resizing = true;
@@ -525,7 +548,7 @@ async function openWelcome(options = {}) {
 }
 
 function focusAddressBar() {
-  toolbarRef.value?.startAddressEditing?.();
+  addressBarRef.value?.startEditing?.();
 }
 
 function onAddressBarOpenFailed(message) {
@@ -1205,6 +1228,7 @@ function blockBrowserShortcuts(event) {
 }
 
 let titlebarPendingDrag = false;
+let titlebarDragged     = false;
 
 function onTitlebarMousedown(event) {
   if (event.button !== 0) return;
@@ -1215,16 +1239,29 @@ function onTitlebarMousedown(event) {
     return;
   }
   titlebarPendingDrag = true;
+  titlebarDragged     = false;
 }
 
 function onTitlebarMousemove() {
   if (!titlebarPendingDrag) return;
   titlebarPendingDrag = false;
+  titlebarDragged     = true;
   void getCurrentWindow().startDragging();
 }
 
 function onTitlebarMouseup() {
   titlebarPendingDrag = false;
+}
+
+// After a window drag the browser still fires a click on the element under the
+// cursor. Intercept it in the capture phase so it never reaches the address bar
+// (which would otherwise enter edit mode on release).
+function onTitlebarClick(event) {
+  if (titlebarDragged) {
+    titlebarDragged = false;
+    event.stopPropagation();
+    event.preventDefault();
+  }
 }
 
 function onAppKeyDown(event) {
@@ -1261,6 +1298,11 @@ function scheduleGridZoomSave() {
   gridZoomSaveTimer = setTimeout(persistGlobalPrefs, 800);
 }
 
+function onGridZoomChange(zoom) {
+  gridZoom.value = Math.min(GRID_ZOOM_MAX, Math.max(GRID_ZOOM_MIN, zoom));
+  scheduleGridZoomSave();
+}
+
 function onGridZoomWheel(e) {
   if (!e.ctrlKey || viewMode.value !== 'grid') return;
   e.preventDefault();
@@ -1270,6 +1312,16 @@ function onGridZoomWheel(e) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+function onTransferWrapWindowClick(e) {
+  if (transferPopoutOpen.value && transferWrapRef.value && !transferWrapRef.value.contains(e.target)) {
+    transferPopoutOpen.value = false;
+  }
+}
+
+watch(() => transferJobs.value.length, (len) => {
+  if (len === 0) transferPopoutOpen.value = false;
+});
+
 onMounted(async () => {
   document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth.value}px`);
   window.addEventListener('wheel', onGridZoomWheel, { passive: false });
@@ -1277,6 +1329,7 @@ onMounted(async () => {
   window.addEventListener('keydown', onAppKeyDown);
   window.addEventListener('mousemove', onTitlebarMousemove);
   window.addEventListener('mouseup', onTitlebarMouseup);
+  window.addEventListener('click', onTransferWrapWindowClick);
   try {
     await bootstrapPreferencesStore();
   } catch (error) {
@@ -1313,6 +1366,7 @@ onBeforeUnmount(async () => {
   window.removeEventListener('keydown', onAppKeyDown);
   window.removeEventListener('mousemove', onTitlebarMousemove);
   window.removeEventListener('mouseup', onTitlebarMouseup);
+  window.removeEventListener('click', onTransferWrapWindowClick);
   if (gridZoomSaveTimer) clearTimeout(gridZoomSaveTimer);
   resizing = false;
   if (directoryWatchDebounceTimer) {
